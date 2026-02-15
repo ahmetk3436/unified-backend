@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"strings"
 
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/dto"
@@ -64,10 +66,40 @@ func TenantMiddleware(registry *tenant.Registry) fiber.Handler {
 			return c.Next()
 		}
 
-		// 4. Missing app_id
+		// 4. Try extracting app_id from Bearer token (without validation — JWT middleware validates later)
+		if auth := c.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+			if appID := extractAppIDFromJWT(auth[7:]); appID != "" {
+				if registry.Exists(appID) {
+					c.Locals("app_id", appID)
+					return c.Next()
+				}
+			}
+		}
+
+		// 5. Missing app_id
 		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
 			Error:   true,
 			Message: "X-App-ID header is required",
 		})
 	}
+}
+
+// extractAppIDFromJWT decodes the JWT payload (without verification) to get app_id.
+// Full validation happens in the JWTProtected middleware.
+func extractAppIDFromJWT(tokenStr string) string {
+	parts := strings.Split(tokenStr, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		AppID string `json:"app_id"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return ""
+	}
+	return claims.AppID
 }
