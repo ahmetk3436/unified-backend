@@ -1,0 +1,177 @@
+{
+  "apps": [
+    {
+      "app_id": "eracheck",
+      "app_name": "EraCheck",
+      "bundle_id": "com.ahmetcoskun.eracheck",
+      "ai_provider": "glm",
+      "ai_config": {
+        "model": "glm-5"
+      },
+      "features": {
+        "apple_signin": true,
+        "subscriptions": true,
+        "ai_analysis": true
+      },
+      "revenuecat_webhook_auth": "",
+      "apple_client_ids": ["com.ahmetcoskun.eracheck"]
+    },
+    {
+      "app_id": "mewify",
+      "app_name": "Mewify",
+      "bundle_id": "com.ahmetcoskun.mewify",
+      "ai_provider": "none",
+      "ai_config": {},
+      "features": {
+        "apple_signin": true,
+        "subscriptions": true,
+        "ai_analysis": false
+      },
+      "revenuecat_webhook_auth": "",
+      "apple_client_ids": ["com.ahmetcoskun.mewify"]
+    },
+    {
+      "app_id": "aurascan",
+      "app_name": "AuraScan AI",
+      "bundle_id": "com.ahmetcoskun.aurascan",
+      "ai_provider": "multi",
+      "ai_config": {
+        "primary": "glm-5",
+        "fallback": "openai",
+        "vision": "glm-4v-plus"
+      },
+      "features": {
+        "apple_signin": true,
+        "subscriptions": true,
+        "ai_analysis": true,
+        "photo_upload": true
+      },
+      "revenuecat_webhook_auth": "",
+      "apple_client_ids": ["com.ahmetcoskun.aurascan"]
+    },
+    {
+      "app_id": "confessit",
+      "app_name": "ConfessIt",
+      "bundle_id": "com.ahmetcoskun.confessit",
+      "ai_provider": "none",
+      "ai_config": {},
+      "features": {
+        "apple_signin": true,
+        "subscriptions": true,
+        "ai_analysis": false,
+        "social_feed": true
+      },
+      "revenuecat_webhook_auth": "",
+      "apple_client_ids": ["com.ahmetcoskun.confessit"]
+    },
+    {
+      "app_id": "daiyly",
+      "app_name": "Daiyly",
+      "bundle_id": "com.ahmetcoskun.daiyly",
+      "ai_provider": "none",
+      "ai_config": {},
+      "features": {
+        "apple_signin": true,
+        "subscriptions": true,
+        "ai_analysis": false
+      },
+      "revenuecat_webhook_auth": "",
+      "apple_client_ids": ["com.ahmetcoskun.daiyly"]
+    },
+    {
+      "app_id": "feelsy",
+      "app_name": "Feelsy",
+      "bundle_id": "com.ahmetcoskun.feelsy",
+      "ai_provider": "glm",
+      "ai_config": {
+        "model": "glm-5"
+      },
+      "features": {
+        "apple_signin": true,
+        "subscriptions": true,
+        "ai_analysis": true
+      },
+      "revenuecat_webhook_auth": "",
+      "apple_client_ids": ["com.ahmetcoskun.feelsy"]
+    },
+    {
+      "app_id": "paletteai",
+      "app_name": "PaletteAI",
+      "bundle_id": "com.ahmetcoskun.paletteai",
+      "ai_provider": "none",
+      "ai_config": {},
+      "features": {
+        "apple_signin": true,
+        "subscriptions": true,
+        "ai_analysis": false
+      },
+      "revenuecat_webhook_auth": "",
+      "apple_client_ids": ["com.ahmetcoskun.paletteai"]
+    },
+    {
+      "app_id": "snapstreak",
+      "app_name": "Snapstreak",
+      "bundle_id": "com.ahmetcoskun.snapstreak",
+      "ai_provider": "none",
+      "ai_config": {},
+      "features": {
+        "apple_signin": true,
+        "subscriptions": true,
+        "ai_analysis": false
+      },
+      "revenuecat_webhook_auth": "",
+      "apple_client_ids": ["com.ahmetcoskun.snapstreak"]
+    },
+    {
+      "app_id": "vibecheck",
+      "app_name": "VibeCheck",
+      "bundle_id": "com.ahmetcoskun.vibecheck",
+      "ai_provider": "openai",
+      "ai_config": {
+        "model": "gpt-4o-mini"
+      },
+      "features": {
+        "apple_signin": true,
+        "subscriptions": true,
+        "ai_analysis": true
+      },
+      "revenuecat_webhook_auth": "",
+      "apple_client_ids": ["com.ahmetcoskun.vibecheck"]
+    },
+    {
+      "app_id": "wouldyou",
+      "app_name": "WouldYou Rather",
+      "bundle_id": "com.ahmetcoskun.wouldyou",
+      "ai_provider": "glm",
+      "ai_config": {
+        "model": "glm-5"
+      },
+      "features": {
+        "apple_signin": true,
+        "subscriptions": true,
+        "ai_analysis": true,
+        "guest_mode": true
+      },
+      "revenuecat_webhook_auth": "",
+      "apple_client_ids": ["com.ahmetcoskun.wouldyou"]
+    },
+    {
+      "app_id": "ecomonitor",
+      "app_name": "EcoMonitor AI",
+      "bundle_id": "com.ahmetcoskun.ecomonitor",
+      "ai_provider": "openai",
+      "ai_config": {
+        "model": "gpt-4o-mini",
+        "vision": "gpt-4o"
+      },
+      "features": {
+        "apple_signin": true,
+        "subscriptions": true,
+        "ai_analysis": true,
+        "geo_data": true
+      },
+      "revenuecat_webhook_auth": "",
+      "apple_client_ids": ["com.ahmetcoskun.ecomonitor"]
+    }
+  ]
+}
