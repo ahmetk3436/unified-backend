@@ -172,6 +172,24 @@
       },
       "revenuecat_webhook_auth": "",
       "apple_client_ids": ["com.ahmetcoskun.ecomonitor"]
+    },
+    {
+      "app_id": "rizzcheck",
+      "app_name": "RizzCheck",
+      "bundle_id": "com.ahmetcoskun.rizzcheck",
+      "ai_provider": "multi",
+      "ai_config": {
+        "primary": "glm-5",
+        "fallback": "deepseek"
+      },
+      "features": {
+        "apple_signin": true,
+        "subscriptions": true,
+        "ai_analysis": true,
+        "guest_mode": false
+      },
+      "revenuecat_webhook_auth": "",
+      "apple_client_ids": ["com.ahmetcoskun.rizzcheck"]
     }
   ]
 }

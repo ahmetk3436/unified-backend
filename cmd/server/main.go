@@ -7,6 +7,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/getsentry/sentry-go"
+	sentryfiber "github.com/getsentry/sentry-go/fiber"
+
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/aurascan"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/confessit"
@@ -18,6 +21,7 @@ import (
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/paletteai"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/snapstreak"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/vibecheck"
+	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/rizzcheck"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/wouldyou"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/config"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/database"
@@ -28,7 +32,6 @@ import (
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/services"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/tenant"
 	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/limiter"
 	fiberlogger "github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/fiber/v2/middleware/requestid"
@@ -98,6 +101,7 @@ func main() {
 		confessit.New(),
 		ecomonitor.New(),
 		aurascan.New(),
+		rizzcheck.New(),
 	}
 
 	// Migrate plugin models
@@ -118,11 +122,31 @@ func main() {
 	moderationHandler := handlers.NewModerationHandler(moderationService)
 	legalHandler := handlers.NewLegalHandler(registry)
 
+	// Sentry error tracking
+	if dsn := os.Getenv("SENTRY_DSN"); dsn != "" {
+		if err := sentry.Init(sentry.ClientOptions{
+			Dsn:              dsn,
+			EnableTracing:    true,
+			TracesSampleRate: 0.2,
+			Environment:      os.Getenv("APP_ENV"),
+		}); err != nil {
+			slog.Error("sentry init failed", "error", err)
+		} else {
+			defer sentry.Flush(2 * time.Second)
+		}
+	}
+
 	// Fiber app
 	app := fiber.New(fiber.Config{
 		BodyLimit:    4 * 1024 * 1024,
 		ErrorHandler: customErrorHandler,
 	})
+
+	// Sentry middleware
+	app.Use(sentryfiber.New(sentryfiber.Options{
+		Repanic:         true,
+		WaitForDelivery: false,
+	}))
 
 	// Global middleware
 	app.Use(recover.New())
@@ -131,15 +155,13 @@ func main() {
 		Format: "${time} | ${status} | ${latency} | ${ip} | ${method} | ${path}\n",
 	}))
 	app.Use(middleware.CORS(cfg))
-	app.Use(middleware.TenantMiddleware(registry))
-
-	// Rate limiter on auth endpoints
-	authLimiter := limiter.New(limiter.Config{
-		Max:               20,
-		Expiration:        1 * time.Minute,
-		LimiterMiddleware: limiter.SlidingWindow{},
+	app.Use(func(c *fiber.Ctx) error {
+		c.Set("X-Content-Type-Options", "nosniff")
+		c.Set("X-Frame-Options", "DENY")
+		c.Set("X-XSS-Protection", "1; mode=block")
+		return c.Next()
 	})
-	app.Use("/api/auth", authLimiter)
+	app.Use(middleware.TenantMiddleware(registry))
 
 	// Routes
 	routes.Setup(app, cfg, database.DB, authHandler, healthHandler, webhookHandler, moderationHandler, legalHandler, plugins)
@@ -158,21 +180,41 @@ func main() {
 
 	<-quit
 	slog.Info("shutting down server...")
+
 	close(cleanupDone)
 	pgLogHandler.Stop()
+	sentry.Flush(2 * time.Second)
+
 	if err := app.Shutdown(); err != nil {
 		slog.Error("server shutdown error", "error", err)
 	}
+
+	// Close database connections
+	if sqlDB, err := database.DB.DB(); err == nil {
+		if err := sqlDB.Close(); err != nil {
+			slog.Error("database close error", "error", err)
+		}
+	}
+
 	slog.Info("server stopped")
 }
 
 func customErrorHandler(c *fiber.Ctx, err error) error {
 	code := fiber.StatusInternalServerError
+	message := "Internal server error"
 	if e, ok := err.(*fiber.Error); ok {
 		code = e.Code
+		message = e.Message
 	}
+
+	// Only expose error details for client errors (4xx), not server errors (5xx)
+	if code >= 500 {
+		slog.Error("unhandled server error", "method", c.Method(), "path", c.Path(), "error", err.Error())
+		message = "Internal server error"
+	}
+
 	return c.Status(code).JSON(fiber.Map{
 		"error":   true,
-		"message": err.Error(),
+		"message": message,
 	})
 }
