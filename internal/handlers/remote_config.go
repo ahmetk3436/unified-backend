@@ -206,7 +206,7 @@ func (h *RemoteConfigHandler) DeleteConfigKey(c *fiber.Ctx) error {
 // SeedDefaults creates default configuration for all apps
 func (h *RemoteConfigHandler) SeedDefaults(appRegistry map[string]string) error {
 	defaultLang := "en"
-	supportedLangs := []string{"en", "tr", "de", "fr", "es", "it", "pt", "ru", "ar", "zh"}
+	_ = defaultLang // Used in configs below
 
 	for appID, appName := range appRegistry {
 		configs := []map[string]interface{}{
