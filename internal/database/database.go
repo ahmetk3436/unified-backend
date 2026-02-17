@@ -46,6 +46,7 @@ func MigrateShared() error {
 		&models.Report{},
 		&models.Block{},
 		&models.SystemLog{},
+		&models.RemoteConfig{},
 	)
 }
 

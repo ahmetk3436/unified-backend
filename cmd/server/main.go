@@ -121,6 +121,11 @@ func main() {
 	webhookHandler := handlers.NewWebhookHandler(subscriptionService, registry)
 	moderationHandler := handlers.NewModerationHandler(moderationService)
 	legalHandler := handlers.NewLegalHandler(registry)
+	configHandler := handlers.NewRemoteConfigHandler(database.DB, registry)
+
+	// Seed default remote config values
+	slog.Info("seeding remote config defaults")
+	configHandler.SeedDefaults(registry.ToMap())
 
 	// Sentry error tracking
 	if dsn := os.Getenv("SENTRY_DSN"); dsn != "" {
@@ -164,7 +169,7 @@ func main() {
 	app.Use(middleware.TenantMiddleware(registry))
 
 	// Routes
-	routes.Setup(app, cfg, database.DB, authHandler, healthHandler, webhookHandler, moderationHandler, legalHandler, plugins)
+	routes.Setup(app, cfg, database.DB, authHandler, healthHandler, webhookHandler, moderationHandler, legalHandler, configHandler, plugins)
 
 	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
