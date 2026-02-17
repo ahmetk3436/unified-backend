@@ -36,15 +36,15 @@ func Setup(
 	auth.Post("/refresh", authHandler.Refresh)
 	auth.Post("/apple", authHandler.AppleSignIn)
 
-	// Protected routes (JWT required)
-	protected := api.Group("", middleware.JWTProtected(cfg))
-	protected.Post("/auth/logout", authHandler.Logout)
-	protected.Delete("/auth/account", authHandler.DeleteAccount)
+	// Protected routes (JWT required) - apply middleware to individual routes
+	// This prevents JWT middleware from affecting public routes
+	api.Post("/auth/logout", middleware.JWTProtected(cfg), authHandler.Logout)
+	api.Delete("/auth/account", middleware.JWTProtected(cfg), authHandler.DeleteAccount)
 
 	// Moderation — user endpoints (protected)
-	protected.Post("/reports", moderationHandler.CreateReport)
-	protected.Post("/blocks", moderationHandler.BlockUser)
-	protected.Delete("/blocks/:id", moderationHandler.UnblockUser)
+	api.Post("/reports", middleware.JWTProtected(cfg), moderationHandler.CreateReport)
+	api.Post("/blocks", middleware.JWTProtected(cfg), moderationHandler.BlockUser)
+	api.Delete("/blocks/:id", middleware.JWTProtected(cfg), moderationHandler.UnblockUser)
 
 	// Admin moderation panel (protected + admin required)
 	admin := api.Group("/admin", middleware.JWTProtected(cfg), middleware.AdminRequired(db, cfg))
@@ -55,7 +55,9 @@ func Setup(
 	webhooks := api.Group("/webhooks")
 	webhooks.Post("/revenuecat/:app_id", webhookHandler.HandleRevenueCat)
 
-	// Plugin routes — each plugin registers its own routes on the protected group
+	// Plugin routes - create a protected group for plugins only
+	// This ensures JWT middleware doesn't affect public routes
+	protected := api.Group("/p", middleware.JWTProtected(cfg))
 	for _, p := range plugins {
 		p.RegisterRoutes(protected, db, cfg)
 	}
