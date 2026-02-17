@@ -109,3 +109,14 @@ func (r *Registry) GetBundleID(appID string) string {
 	}
 	return cfg.BundleID
 }
+
+// ToMap returns a map of app_id to app_name for easy iteration
+func (r *Registry) ToMap() map[string]string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make(map[string]string, len(r.apps))
+	for appID, cfg := range r.apps {
+		result[appID] = cfg.AppName
+	}
+	return result
+}
