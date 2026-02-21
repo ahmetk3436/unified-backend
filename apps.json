@@ -3,7 +3,7 @@
     {
       "app_id": "eracheck",
       "app_name": "EraCheck",
-      "bundle_id": "com.ahmetcoskun.eracheck",
+      "bundle_id": "com.ahmetcoskunkizilkaya.eracheck",
       "ai_provider": "glm",
       "ai_config": {
         "model": "glm-5"
@@ -14,12 +14,14 @@
         "ai_analysis": true
       },
       "revenuecat_webhook_auth": "",
-      "apple_client_ids": ["com.ahmetcoskun.eracheck"]
+      "apple_client_ids": [
+        "com.ahmetcoskunkizilkaya.eracheck"
+      ]
     },
     {
       "app_id": "mewify",
       "app_name": "Mewify",
-      "bundle_id": "com.ahmetcoskun.mewify",
+      "bundle_id": "com.ahmetcoskunkizilkaya.mewify",
       "ai_provider": "none",
       "ai_config": {},
       "features": {
@@ -28,12 +30,14 @@
         "ai_analysis": false
       },
       "revenuecat_webhook_auth": "",
-      "apple_client_ids": ["com.ahmetcoskun.mewify"]
+      "apple_client_ids": [
+        "com.ahmetcoskunkizilkaya.mewify"
+      ]
     },
     {
       "app_id": "aurascan",
       "app_name": "AuraScan AI",
-      "bundle_id": "com.ahmetcoskun.aurascan",
+      "bundle_id": "com.ahmetcoskunkizilkaya.aurascan",
       "ai_provider": "multi",
       "ai_config": {
         "primary": "glm-5",
@@ -47,12 +51,14 @@
         "photo_upload": true
       },
       "revenuecat_webhook_auth": "",
-      "apple_client_ids": ["com.ahmetcoskun.aurascan"]
+      "apple_client_ids": [
+        "com.ahmetcoskunkizilkaya.aurascan"
+      ]
     },
     {
       "app_id": "confessit",
       "app_name": "ConfessIt",
-      "bundle_id": "com.ahmetcoskun.confessit",
+      "bundle_id": "com.ahmetcoskunkizilkaya.confessboxai",
       "ai_provider": "none",
       "ai_config": {},
       "features": {
@@ -62,12 +68,14 @@
         "social_feed": true
       },
       "revenuecat_webhook_auth": "",
-      "apple_client_ids": ["com.ahmetcoskun.confessit"]
+      "apple_client_ids": [
+        "com.ahmetcoskunkizilkaya.confessboxai"
+      ]
     },
     {
       "app_id": "daiyly",
       "app_name": "Daiyly",
-      "bundle_id": "com.ahmetcoskun.daiyly",
+      "bundle_id": "com.ahmetcoskunkizilkaya.daiyly",
       "ai_provider": "none",
       "ai_config": {},
       "features": {
@@ -76,12 +84,14 @@
         "ai_analysis": false
       },
       "revenuecat_webhook_auth": "",
-      "apple_client_ids": ["com.ahmetcoskun.daiyly"]
+      "apple_client_ids": [
+        "com.ahmetcoskunkizilkaya.daiyly"
+      ]
     },
     {
       "app_id": "feelsy",
       "app_name": "Feelsy",
-      "bundle_id": "com.ahmetcoskun.feelsy",
+      "bundle_id": "com.ahmetcoskunkizilkaya.moodtrackai",
       "ai_provider": "glm",
       "ai_config": {
         "model": "glm-5"
@@ -92,12 +102,14 @@
         "ai_analysis": true
       },
       "revenuecat_webhook_auth": "",
-      "apple_client_ids": ["com.ahmetcoskun.feelsy"]
+      "apple_client_ids": [
+        "com.ahmetcoskunkizilkaya.moodtrackai"
+      ]
     },
     {
       "app_id": "paletteai",
       "app_name": "PaletteAI",
-      "bundle_id": "com.ahmetcoskun.paletteai",
+      "bundle_id": "com.ahmetcoskunkizilkaya.colorpalette",
       "ai_provider": "none",
       "ai_config": {},
       "features": {
@@ -106,12 +118,14 @@
         "ai_analysis": false
       },
       "revenuecat_webhook_auth": "",
-      "apple_client_ids": ["com.ahmetcoskun.paletteai"]
+      "apple_client_ids": [
+        "com.ahmetcoskunkizilkaya.colorpalette"
+      ]
     },
     {
       "app_id": "snapstreak",
       "app_name": "Snapstreak",
-      "bundle_id": "com.ahmetcoskun.snapstreak",
+      "bundle_id": "com.ahmetcoskunkizilkaya.streakkeepai",
       "ai_provider": "none",
       "ai_config": {},
       "features": {
@@ -120,12 +134,14 @@
         "ai_analysis": false
       },
       "revenuecat_webhook_auth": "",
-      "apple_client_ids": ["com.ahmetcoskun.snapstreak"]
+      "apple_client_ids": [
+        "com.ahmetcoskunkizilkaya.streakkeepai"
+      ]
     },
     {
       "app_id": "vibecheck",
       "app_name": "VibeCheck",
-      "bundle_id": "com.ahmetcoskun.vibecheck",
+      "bundle_id": "com.ahmetcoskunkizilkaya.vibemeter",
       "ai_provider": "openai",
       "ai_config": {
         "model": "gpt-4o-mini"
@@ -136,12 +152,14 @@
         "ai_analysis": true
       },
       "revenuecat_webhook_auth": "",
-      "apple_client_ids": ["com.ahmetcoskun.vibecheck"]
+      "apple_client_ids": [
+        "com.ahmetcoskunkizilkaya.vibemeter"
+      ]
     },
     {
       "app_id": "wouldyou",
       "app_name": "WouldYou Rather",
-      "bundle_id": "com.ahmetcoskun.wouldyou",
+      "bundle_id": "com.ahmetcoskunkizilkaya.wouldyourather",
       "ai_provider": "glm",
       "ai_config": {
         "model": "glm-5"
@@ -153,12 +171,14 @@
         "guest_mode": true
       },
       "revenuecat_webhook_auth": "",
-      "apple_client_ids": ["com.ahmetcoskun.wouldyou"]
+      "apple_client_ids": [
+        "com.ahmetcoskunkizilkaya.wouldyourather"
+      ]
     },
     {
       "app_id": "ecomonitor",
       "app_name": "EcoMonitor AI",
-      "bundle_id": "com.ahmetcoskun.ecomonitor",
+      "bundle_id": "com.ahmetcoskunkizilkaya.ecomonitor",
       "ai_provider": "openai",
       "ai_config": {
         "model": "gpt-4o-mini",
@@ -171,12 +191,14 @@
         "geo_data": true
       },
       "revenuecat_webhook_auth": "",
-      "apple_client_ids": ["com.ahmetcoskun.ecomonitor"]
+      "apple_client_ids": [
+        "com.ahmetcoskunkizilkaya.ecomonitor"
+      ]
     },
     {
       "app_id": "rizzcheck",
       "app_name": "RizzCheck",
-      "bundle_id": "com.ahmetcoskun.rizzcheck",
+      "bundle_id": "com.ahmetcoskunkizilkaya.rizzcheck",
       "ai_provider": "multi",
       "ai_config": {
         "primary": "glm-5",
@@ -189,7 +211,33 @@
         "guest_mode": false
       },
       "revenuecat_webhook_auth": "",
-      "apple_client_ids": ["com.ahmetcoskun.rizzcheck"]
+      "apple_client_ids": [
+        "com.ahmetcoskunkizilkaya.rizzcheck"
+      ]
+    },
+    {
+      "app_id": "moodtracker",
+      "app_name": "Moodtracker",
+      "bundle_id": "com.ahmetcoskunkizilkaya.feelsy",
+      "apple_client_ids": [
+        "com.ahmetcoskunkizilkaya.feelsy"
+      ]
+    },
+    {
+      "app_id": "streakkeeper",
+      "app_name": "Streakkeeper",
+      "bundle_id": "com.ahmetcoskunkizilkaya.snapstreak",
+      "apple_client_ids": [
+        "com.ahmetcoskunkizilkaya.snapstreak"
+      ]
+    },
+    {
+      "app_id": "subtrack",
+      "app_name": "Subtrack",
+      "bundle_id": "com.ahmetcoskunkizilkaya.subtrack",
+      "apple_client_ids": [
+        "com.ahmetcoskunkizilkaya.subtrack"
+      ]
     }
   ]
 }
