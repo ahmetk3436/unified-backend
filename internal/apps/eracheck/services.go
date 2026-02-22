@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math/rand"
 	"net/http"
 	"sort"
 	"strings"
@@ -354,12 +353,20 @@ func (s *ChallengeService) GetDailyChallenge(appID string, userID uuid.UUID) (*E
 		return nil, err
 	}
 
-	prompt := challengePrompts[rand.Intn(len(challengePrompts))]
+	// Pick photo challenge deterministically by date so all users see the same photo each day
+	dayIndex := today.Year()*366 + today.YearDay()
+	entry := PhotoChallenges[dayIndex%len(PhotoChallenges)]
+
+	optionsJSON, _ := json.Marshal(entry.Options)
+
 	challenge = EraChallenge{
 		AppID:         appID,
 		UserID:        userID,
 		ChallengeDate: today,
-		Prompt:        prompt,
+		PhotoURL:      entry.PhotoURL,
+		CorrectDecade: entry.CorrectDecade,
+		FunFact:       entry.FunFact,
+		Options:       optionsJSON,
 	}
 	if err := s.db.Create(&challenge).Error; err != nil {
 		return nil, err
@@ -367,13 +374,7 @@ func (s *ChallengeService) GetDailyChallenge(appID string, userID uuid.UUID) (*E
 	return &challenge, nil
 }
 
-func (s *ChallengeService) SubmitChallengeResponse(appID string, userID uuid.UUID, response string) (*EraChallenge, error) {
-	if s.moderationService != nil {
-		if isClean, reason := s.moderationService.FilterContent(response); !isClean {
-			return nil, fmt.Errorf("content rejected: %s", s.moderationService.GetRejectionMessage(reason))
-		}
-	}
-
+func (s *ChallengeService) SubmitChallengeAnswer(appID string, userID uuid.UUID, answer string) (*EraChallenge, error) {
 	today := time.Now().Truncate(24 * time.Hour)
 	var challenge EraChallenge
 	err := s.db.Scopes(tenant.ForTenant(appID)).
@@ -381,17 +382,18 @@ func (s *ChallengeService) SubmitChallengeResponse(appID string, userID uuid.UUI
 	if err != nil {
 		return nil, errors.New("no challenge found for today — get today's challenge first")
 	}
-	if challenge.Response != "" {
-		return nil, errors.New("you have already responded to today's challenge")
+	if challenge.UserAnswer != "" || challenge.Response != "" {
+		return nil, errors.New("you have already answered today's challenge")
 	}
 
-	era := s.detectEraFromResponse(response)
-	if era == "unknown" {
-		era = "2022_clean_girl"
-	}
+	isCorrect := strings.EqualFold(strings.TrimSpace(answer), strings.TrimSpace(challenge.CorrectDecade))
 
-	challenge.Response = response
-	challenge.Era = era
+	challenge.UserAnswer = answer
+	challenge.IsCorrect = isCorrect
+	// keep legacy fields populated so old history queries still work
+	challenge.Response = answer
+	challenge.Era = challenge.CorrectDecade
+
 	if err := s.db.Save(&challenge).Error; err != nil {
 		return nil, err
 	}
@@ -483,27 +485,36 @@ func NewAIAnalyzer(apiURL, apiKey string) *AIAnalyzer {
 func (a *AIAnalyzer) IsConfigured() bool { return a.apiKey != "" }
 
 func (a *AIAnalyzer) AnalyzeEraFromText(input string) (string, error) {
-	body, _ := json.Marshal(aiRequest{
+	body, err := json.Marshal(aiRequest{
 		Model: "glm-5",
 		Messages: []aiMessage{
 			{Role: "system", Content: "You are an aesthetic era classifier. Given user text, classify into exactly one of: y2k, 2016_tumblr, 2018_vsco, 2020_cottagecore, dark_academia, indie_sleaze, 2022_clean_girl, 2024_mob_wife, coastal_cowgirl, 2025_demure. Respond with ONLY the era key."},
 			{Role: "user", Content: input},
 		},
 	})
+	if err != nil {
+		return "", fmt.Errorf("marshal AI request: %w", err)
+	}
 
-	req, _ := http.NewRequest("POST", a.apiURL, bytes.NewBuffer(body))
+	req, err := http.NewRequest("POST", a.apiURL, bytes.NewBuffer(body))
+	if err != nil {
+		return "", fmt.Errorf("create AI request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+a.apiKey)
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("AI request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read AI response: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("API status %d", resp.StatusCode)
+		return "", fmt.Errorf("API status %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var aiResp aiResponse

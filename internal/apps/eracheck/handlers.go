@@ -1,11 +1,12 @@
 package eracheck
 
 import (
-	"strings"
+	"errors"
 
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/tenant"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type EraHandler struct {
@@ -48,7 +49,7 @@ func (h *EraHandler) SubmitQuiz(c *fiber.Ctx) error {
 	result, err := h.eraService.SubmitQuizAnswers(appID, userID, req.Answers)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": true, "message": err.Error(),
+			"error": true, "message": "Failed to submit quiz",
 		})
 	}
 
@@ -91,7 +92,7 @@ func (h *EraHandler) GetResult(c *fiber.Ctx) error {
 
 	result, err := h.eraService.GetResultByID(id)
 	if err != nil {
-		if err.Error() == "record not found" {
+		if errors.Is(err, gorm.ErrRecordNotFound) || err.Error() == "record not found" {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 				"error": true, "message": "Result not found",
 			})
@@ -168,7 +169,7 @@ func (h *ChallengeHandler) GetDailyChallenge(c *fiber.Ctx) error {
 			"error": true, "message": "Failed to retrieve challenge",
 		})
 	}
-	return c.JSON(fiber.Map{"error": false, "challenge": challenge})
+	return c.JSON(fiber.Map{"error": false, "challenge": challenge.ToPublicView()})
 }
 
 func (h *ChallengeHandler) SubmitChallenge(c *fiber.Ctx) error {
@@ -181,29 +182,26 @@ func (h *ChallengeHandler) SubmitChallenge(c *fiber.Ctx) error {
 	}
 
 	var req struct {
-		Response string `json:"response"`
+		Answer string `json:"answer"`
 	}
-	if err := c.BodyParser(&req); err != nil || req.Response == "" {
+	if err := c.BodyParser(&req); err != nil || req.Answer == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": true, "message": "Response is required",
+			"error": true, "message": "Answer is required",
 		})
 	}
 
-	challenge, err := h.challengeService.SubmitChallengeResponse(appID, userID, req.Response)
+	challenge, err := h.challengeService.SubmitChallengeAnswer(appID, userID, req.Answer)
 	if err != nil {
-		if strings.Contains(err.Error(), "content rejected") {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"error": true, "message": err.Error(), "code": "CONTENT_MODERATION_FAILED",
-			})
-		}
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": true, "message": err.Error(),
 		})
 	}
 
-	_ = h.streakService.UpdateStreak(appID, userID)
+	if err := h.streakService.UpdateStreak(appID, userID); err != nil {
+		_ = err // non-critical
+	}
 
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"error": false, "challenge": challenge})
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"error": false, "challenge": challenge.ToPublicView()})
 }
 
 func (h *ChallengeHandler) GetHistory(c *fiber.Ctx) error {
@@ -221,7 +219,12 @@ func (h *ChallengeHandler) GetHistory(c *fiber.Ctx) error {
 			"error": true, "message": "Failed to retrieve history",
 		})
 	}
-	return c.JSON(fiber.Map{"error": false, "challenges": challenges})
+
+	views := make([]ChallengePublicView, len(challenges))
+	for i, ch := range challenges {
+		views[i] = ch.ToPublicView()
+	}
+	return c.JSON(fiber.Map{"error": false, "challenges": views})
 }
 
 func (h *ChallengeHandler) GetStreak(c *fiber.Ctx) error {

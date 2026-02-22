@@ -101,6 +101,205 @@ var challengePrompts = []string{
 	"How would your friends describe your style in 3 words?",
 }
 
+// PhotoChallengeEntry defines one daily photo-guess challenge.
+type PhotoChallengeEntry struct {
+	PhotoURL      string
+	CorrectDecade string
+	FunFact       string
+	Options       []string
+}
+
+// PhotoChallenges is the pool rotated daily by (year*366 + day-of-year) % len.
+// Images: Wikimedia Commons Special:FilePath redirect (follows to CDN).
+var PhotoChallenges = []PhotoChallengeEntry{
+	// --- 1950s ---
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Rosa_Parks_Booking.jpg&width=640",
+		CorrectDecade: "1950s",
+		FunFact:       "Rosa Parks was arrested on December 1, 1955 for refusing to give up her bus seat in Montgomery, Alabama — sparking the Civil Rights Movement.",
+		Options:       []string{"1930s", "1940s", "1950s", "1960s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Sputnik_asm.jpg&width=640",
+		CorrectDecade: "1950s",
+		FunFact:       "Sputnik 1, launched October 4, 1957, was the first artificial Earth satellite — kicking off the Space Race between the US and USSR.",
+		Options:       []string{"1940s", "1950s", "1960s", "1970s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Eisenhower_in_the_Oval_Office.jpg&width=640",
+		CorrectDecade: "1950s",
+		FunFact:       "Dwight D. Eisenhower served as the 34th US President from 1953–1961, overseeing the post-war economic boom and creation of the Interstate Highway System.",
+		Options:       []string{"1940s", "1950s", "1960s", "1970s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=1955_Chevrolet_Bel_Air.jpg&width=640",
+		CorrectDecade: "1950s",
+		FunFact:       "The 1955 Chevrolet Bel Air is considered the quintessential American car of the 1950s — chrome bumpers, two-tone paint, and tail fins defined the era.",
+		Options:       []string{"1940s", "1950s", "1960s", "1970s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Drive-in_theater.jpg&width=640",
+		CorrectDecade: "1950s",
+		FunFact:       "At their peak in 1958, over 4,000 drive-in theaters operated across the US — a symbol of postwar suburban prosperity and car culture.",
+		Options:       []string{"1940s", "1950s", "1960s", "1970s"},
+	},
+	// --- 1960s ---
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Buzz_aldrin_apollo_11.jpg&width=640",
+		CorrectDecade: "1960s",
+		FunFact:       "Buzz Aldrin walked on the Moon on July 20, 1969 during Apollo 11 — the first crewed lunar landing. Neil Armstrong took this photo.",
+		Options:       []string{"1950s", "1960s", "1970s", "1980s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Martin_Luther_King_-_March_on_Washington.jpg&width=640",
+		CorrectDecade: "1960s",
+		FunFact:       "On August 28, 1963, Dr. Martin Luther King Jr. delivered his 'I Have a Dream' speech to 250,000 people at the March on Washington.",
+		Options:       []string{"1950s", "1960s", "1970s", "1980s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Woodstock_redmond_stage.jpg&width=640",
+		CorrectDecade: "1960s",
+		FunFact:       "Woodstock Music Festival (August 1969) drew 400,000+ people to a dairy farm in upstate New York — defining a generation of peace, love, and rock music.",
+		Options:       []string{"1950s", "1960s", "1970s", "1980s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=The_Beatles_in_America.JPG&width=640",
+		CorrectDecade: "1960s",
+		FunFact:       "The Beatles arrived in America on February 7, 1964, appearing on The Ed Sullivan Show to 73 million viewers — launching 'Beatlemania' in the US.",
+		Options:       []string{"1950s", "1960s", "1970s", "1980s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=John_F._Kennedy,_White_House_color_photo_portrait.jpg&width=640",
+		CorrectDecade: "1960s",
+		FunFact:       "John F. Kennedy was the youngest elected US President at 43, and the first Catholic president. His presidency (1961–1963) defined the optimism of the early 1960s.",
+		Options:       []string{"1950s", "1960s", "1970s", "1980s"},
+	},
+	// --- 1970s ---
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Disco_ball.jpg&width=640",
+		CorrectDecade: "1970s",
+		FunFact:       "Disco peaked in the late 1970s, with Studio 54 in New York City becoming the epicenter of the movement. The mirror ball became its most iconic symbol.",
+		Options:       []string{"1960s", "1970s", "1980s", "1990s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Apple_I_Computer.jpg&width=640",
+		CorrectDecade: "1970s",
+		FunFact:       "Steve Wozniak designed the Apple I in 1976 — one of the first personal computers sold as a fully assembled circuit board. Only 200 were ever made.",
+		Options:       []string{"1960s", "1970s", "1980s", "1990s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Pong.png&width=640",
+		CorrectDecade: "1970s",
+		FunFact:       "Pong (1972) was Atari's first arcade video game and one of the earliest commercially successful video games — igniting the gaming industry.",
+		Options:       []string{"1960s", "1970s", "1980s", "1990s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Star_Wars_1977_logo.png&width=640",
+		CorrectDecade: "1970s",
+		FunFact:       "Star Wars (1977) revolutionized Hollywood blockbusters and special effects. It became the highest-grossing film of its time and launched one of the most successful franchises ever.",
+		Options:       []string{"1960s", "1970s", "1980s", "1990s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Kent_State_massacre.jpg&width=640",
+		CorrectDecade: "1970s",
+		FunFact:       "The Kent State shootings on May 4, 1970 — when National Guard troops fired on Vietnam War protesters — became one of the defining images of American anti-war sentiment.",
+		Options:       []string{"1960s", "1970s", "1980s", "1990s"},
+	},
+	// --- 1980s ---
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Rubik%27s_cube_solved.jpg&width=640",
+		CorrectDecade: "1980s",
+		FunFact:       "The Rubik's Cube was invented in 1974 but became a global craze in the early 1980s — selling over 350 million units, making it the world's best-selling toy.",
+		Options:       []string{"1970s", "1980s", "1990s", "2000s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Sony_Walkman_WM-F1.jpg&width=640",
+		CorrectDecade: "1980s",
+		FunFact:       "Sony introduced the Walkman in 1979, but it dominated the 1980s — changing how people listened to music forever and selling over 400 million units.",
+		Options:       []string{"1970s", "1980s", "1990s", "2000s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Pac-Man_Cabinet.jpg&width=640",
+		CorrectDecade: "1980s",
+		FunFact:       "Pac-Man (1980) became the first arcade game to achieve widespread mainstream popularity — generating over $2.5 billion in quarters and spawning a Saturday morning cartoon.",
+		Options:       []string{"1970s", "1980s", "1990s", "2000s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Berlin_Wall_1986.jpg&width=640",
+		CorrectDecade: "1980s",
+		FunFact:       "The Berlin Wall, built in 1961, divided East and West Berlin until November 9, 1989 — when its fall marked the symbolic end of the Cold War.",
+		Options:       []string{"1970s", "1980s", "1990s", "2000s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Commodore64.jpg&width=640",
+		CorrectDecade: "1980s",
+		FunFact:       "The Commodore 64 (1982) is the best-selling personal computer model in history — with an estimated 17 million units sold, bringing home computing to the masses.",
+		Options:       []string{"1970s", "1980s", "1990s", "2000s"},
+	},
+	// --- 1990s ---
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Windows_95_Desktop_screenshot.png&width=640",
+		CorrectDecade: "1990s",
+		FunFact:       "Windows 95 launched on August 24, 1995, with 'Start Me Up' by the Rolling Stones. Over 1 million copies sold in just 4 days — the 'Start' button changed computing forever.",
+		Options:       []string{"1980s", "1990s", "2000s", "2010s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Tamagotchi_0124_ubt.jpeg&width=640",
+		CorrectDecade: "1990s",
+		FunFact:       "Tamagotchi, released in 1996, sold over 82 million units worldwide and sparked a virtual pet craze. Schools banned them because students couldn't stop feeding them in class.",
+		Options:       []string{"1980s", "1990s", "2000s", "2010s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Nokia_3310_Blue_R7309170_wp.jpg&width=640",
+		CorrectDecade: "1990s",
+		FunFact:       "The Nokia 3310 (2000) — an icon of the late 90s/2000s era — became famous for its near-indestructibility. Snake, its built-in game, became one of the most-played mobile games ever.",
+		Options:       []string{"1980s", "1990s", "2000s", "2010s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Netscape_Navigator_1.22.png&width=640",
+		CorrectDecade: "1990s",
+		FunFact:       "Netscape Navigator (1994) was the first web browser for everyday people, bringing the World Wide Web into homes. At its peak it had 90% market share.",
+		Options:       []string{"1980s", "1990s", "2000s", "2010s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Kurt_Cobain_1993.jpg&width=640",
+		CorrectDecade: "1990s",
+		FunFact:       "Kurt Cobain and Nirvana's 'Nevermind' (1991) single-handedly ended the hair metal era and launched grunge into the mainstream — becoming the voice of Generation X.",
+		Options:       []string{"1980s", "1990s", "2000s", "2010s"},
+	},
+	// --- 2000s ---
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=IPod_1G_transparence.png&width=640",
+		CorrectDecade: "2000s",
+		FunFact:       "Steve Jobs introduced the original iPod on October 23, 2001 with the tagline '1,000 songs in your pocket.' It transformed the music industry and set the stage for the iPhone.",
+		Options:       []string{"1990s", "2000s", "2010s", "2020s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Myspace_logo.svg&width=640",
+		CorrectDecade: "2000s",
+		FunFact:       "MySpace launched in 2003 and by 2006 was the most visited website in the US — surpassing Google. It introduced a generation to social media and online self-expression.",
+		Options:       []string{"1990s", "2000s", "2010s", "2020s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=New_York_City_on_September_15%2C_2001.jpg&width=640",
+		CorrectDecade: "2000s",
+		FunFact:       "The September 11, 2001 attacks on New York City killed 2,977 people and changed global politics, airport security, and foreign policy for decades.",
+		Options:       []string{"1990s", "2000s", "2010s", "2020s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Motorola_RAZR_V3.jpg&width=640",
+		CorrectDecade: "2000s",
+		FunFact:       "The Motorola RAZR V3 (2004) was the thinnest phone ever made at the time — a status symbol that sold over 130 million units, becoming the bestselling clamshell phone in history.",
+		Options:       []string{"1990s", "2000s", "2010s", "2020s"},
+	},
+	{
+		PhotoURL:      "https://commons.wikimedia.org/w/index.php?title=Special:FilePath&file=Obama_Hope_poster.jpg&width=640",
+		CorrectDecade: "2000s",
+		FunFact:       "Shepard Fairey's 'Hope' poster became one of the most iconic political images of the 21st century — a symbol of Barack Obama's 2008 presidential campaign that energized a generation.",
+		Options:       []string{"1990s", "2000s", "2010s", "2020s"},
+	},
+}
+
 // SeedQuizQuestions inserts quiz questions for a specific app.
 func SeedQuizQuestions(db *gorm.DB, appID string) error {
 	seeded := 0
