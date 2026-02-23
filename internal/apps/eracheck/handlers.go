@@ -1,7 +1,10 @@
 package eracheck
 
 import (
+	"encoding/base64"
 	"errors"
+	"fmt"
+	"io"
 
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/tenant"
 	"github.com/gofiber/fiber/v2"
@@ -201,7 +204,11 @@ func (h *ChallengeHandler) SubmitChallenge(c *fiber.Ctx) error {
 		_ = err // non-critical
 	}
 
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"error": false, "challenge": challenge.ToPublicView()})
+	view := challenge.ToPublicView()
+	// Compute community accuracy for today's challenge
+	view.CommunityAccuracy = h.challengeService.GetCommunityAccuracy(appID, challenge.ChallengeDate)
+
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"error": false, "challenge": view})
 }
 
 func (h *ChallengeHandler) GetHistory(c *fiber.Ctx) error {
@@ -251,4 +258,97 @@ func (h *ChallengeHandler) GetStreak(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{"error": false, "streak": streak, "badges": badges})
+}
+
+func (h *ChallengeHandler) UseStreakFreeze(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"error": true, "message": "Unauthorized",
+		})
+	}
+
+	streak, err := h.streakService.UseStreakFreeze(appID, userID)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": true, "message": err.Error(),
+		})
+	}
+
+	return c.JSON(fiber.Map{"error": false, "streak": streak, "message": "Streak freeze used successfully"})
+}
+
+// --- Photo Analysis Handler ---
+
+type PhotoHandler struct {
+	photoService *PhotoService
+}
+
+func NewPhotoHandler(photoService *PhotoService) *PhotoHandler {
+	return &PhotoHandler{photoService: photoService}
+}
+
+func (h *PhotoHandler) AnalyzePhoto(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+
+	// Get user ID (optional — guests can use this)
+	var userID *uuid.UUID
+	if uid, err := tenant.GetUserID(c); err == nil {
+		userID = &uid
+	}
+
+	// Parse multipart photo
+	file, err := c.FormFile("photo")
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": true, "message": "Photo is required",
+		})
+	}
+
+	// Read the file
+	f, err := file.Open()
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": true, "message": "Failed to read photo",
+		})
+	}
+	defer f.Close()
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": true, "message": "Failed to read photo data",
+		})
+	}
+
+	// Determine MIME type from content type or filename
+	contentType := file.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "image/jpeg"
+	}
+
+	// Base64 encode for vision API
+	b64 := base64.StdEncoding.EncodeToString(data)
+	imageURL := fmt.Sprintf("data:%s;base64,%s", contentType, b64)
+
+	analysis, err := h.photoService.AnalyzePhoto(appID, userID, imageURL)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": true, "message": "Failed to analyze photo: " + err.Error(),
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"error": false,
+		"analysis": fiber.Map{
+			"id":               analysis.ID,
+			"photo_url":        "",
+			"predicted_decade": analysis.PredictedDecade,
+			"confidence_score": analysis.ConfidenceScore,
+			"analysis":         analysis.Analysis,
+			"characteristics":  analysis.Characteristics,
+			"created_at":       analysis.CreatedAt,
+		},
+	})
 }

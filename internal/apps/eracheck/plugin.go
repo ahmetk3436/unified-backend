@@ -25,6 +25,7 @@ func (p *Plugin) Models() []interface{} {
 		&EraResult{},
 		&EraChallenge{},
 		&EraStreak{},
+		&PhotoAnalysis{},
 	}
 }
 
@@ -34,9 +35,13 @@ func (p *Plugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *config.Co
 	streakService := NewStreakService(db)
 	challengeService := NewChallengeService(db, cfg.GLMAPIURL, cfg.GLMAPIKey, p.moderationService)
 
+	// Photo analysis service
+	photoService := NewPhotoService(db, cfg.GLMAPIURL, cfg.GLMAPIKey)
+
 	// Handlers
 	eraHandler := NewEraHandler(eraService)
 	challengeHandler := NewChallengeHandler(challengeService, streakService)
+	photoHandler := NewPhotoHandler(photoService)
 
 	// Seed quiz questions for this app
 	if err := SeedQuizQuestions(db, "eracheck"); err != nil {
@@ -51,9 +56,20 @@ func (p *Plugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *config.Co
 	router.Post("/era/results/:id/share", eraHandler.ShareResult)
 	router.Get("/era/stats", eraHandler.GetStats)
 
-	// Challenge routes
+	// Challenge routes (prefixed with /era to avoid collision with wouldyou /challenges)
+	router.Get("/era/challenges/daily", challengeHandler.GetDailyChallenge)
+	router.Post("/era/challenges/submit", challengeHandler.SubmitChallenge)
+	router.Get("/era/challenges/history", challengeHandler.GetHistory)
+	router.Get("/era/challenges/streak", challengeHandler.GetStreak)
+	router.Post("/era/challenges/use-streak-freeze", challengeHandler.UseStreakFreeze)
+
+	// Photo analysis route
+	router.Post("/photos/analyze", photoHandler.AnalyzePhoto)
+
+	// Alias routes without /era prefix (used by EraCheck mobile app)
 	router.Get("/challenges/daily", challengeHandler.GetDailyChallenge)
 	router.Post("/challenges/submit", challengeHandler.SubmitChallenge)
 	router.Get("/challenges/history", challengeHandler.GetHistory)
 	router.Get("/challenges/streak", challengeHandler.GetStreak)
+	router.Post("/challenges/use-streak-freeze", challengeHandler.UseStreakFreeze)
 }

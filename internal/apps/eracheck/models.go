@@ -60,14 +60,15 @@ type EraChallenge struct {
 
 // ChallengePublicView is the safe serialization — correct_decade/fun_fact only revealed after answering.
 type ChallengePublicView struct {
-	ID            uuid.UUID      `json:"id"`
-	ChallengeDate time.Time      `json:"challenge_date"`
-	PhotoURL      string         `json:"photo_url"`
-	Options       datatypes.JSON `json:"options"`
-	UserAnswer    string         `json:"user_answer"`
-	IsCorrect     bool           `json:"is_correct"`
-	CorrectDecade string         `json:"correct_decade,omitempty"`
-	FunFact       string         `json:"fun_fact,omitempty"`
+	ID                uuid.UUID      `json:"id"`
+	ChallengeDate     time.Time      `json:"challenge_date"`
+	PhotoURL          string         `json:"photo_url"`
+	Options           datatypes.JSON `json:"options"`
+	UserAnswer        string         `json:"user_answer"`
+	IsCorrect         bool           `json:"is_correct"`
+	CorrectDecade     string         `json:"correct_decade,omitempty"`
+	FunFact           string         `json:"fun_fact,omitempty"`
+	CommunityAccuracy float64        `json:"community_accuracy,omitempty"`
 }
 
 func (c *EraChallenge) ToPublicView() ChallengePublicView {
@@ -86,6 +87,20 @@ func (c *EraChallenge) ToPublicView() ChallengePublicView {
 	return view
 }
 
+type PhotoAnalysis struct {
+	ID              uuid.UUID      `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
+	AppID           string         `gorm:"size:50;not null;index" json:"app_id"`
+	UserID          *uuid.UUID     `gorm:"type:uuid;index" json:"user_id"`
+	PhotoURL        string         `json:"photo_url"`
+	PredictedDecade string         `json:"predicted_decade"`
+	ConfidenceScore int            `json:"confidence_score"`
+	Analysis        string         `gorm:"type:text" json:"analysis"`
+	Characteristics datatypes.JSON `gorm:"type:jsonb" json:"characteristics"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	DeletedAt       gorm.DeletedAt `gorm:"index" json:"deleted_at,omitempty"`
+}
+
 type EraStreak struct {
 	ID              uuid.UUID      `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
 	AppID           string         `gorm:"size:50;not null;uniqueIndex:idx_era_streak_app_user" json:"app_id"`
@@ -93,6 +108,7 @@ type EraStreak struct {
 	CurrentStreak   int            `gorm:"default:0" json:"current_streak"`
 	LongestStreak   int            `gorm:"default:0" json:"longest_streak"`
 	LastActiveDate  time.Time      `gorm:"type:date" json:"last_active_date"`
+	StreakFreezes   int            `gorm:"default:1" json:"streak_freezes"`
 	TotalQuizzes    int            `gorm:"default:0" json:"total_quizzes"`
 	TotalChallenges int            `gorm:"default:0" json:"total_challenges"`
 	CreatedAt       time.Time      `json:"created_at"`

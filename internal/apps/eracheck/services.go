@@ -301,6 +301,33 @@ func (s *StreakService) UpdateStreak(appID string, userID uuid.UUID) error {
 	return s.db.Save(&streak).Error
 }
 
+// UseStreakFreeze allows user to preserve their streak when they miss a day.
+// Returns the updated streak or error if no freezes available.
+func (s *StreakService) UseStreakFreeze(appID string, userID uuid.UUID) (*EraStreak, error) {
+	streak, err := s.GetOrCreateStreak(appID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if streak.StreakFreezes <= 0 {
+		return nil, errors.New("no streak freezes available")
+	}
+
+	today := time.Now().Truncate(24 * time.Hour)
+	lastActive := streak.LastActiveDate.Truncate(24 * time.Hour)
+
+	// Only allow freeze if they missed exactly yesterday (streak would break today)
+	if today.Sub(lastActive) < 24*time.Hour || today.Sub(lastActive) > 72*time.Hour {
+		return nil, errors.New("streak freeze can only be used within 2 days of last activity")
+	}
+
+	streak.StreakFreezes--
+	streak.LastActiveDate = today // Pretend they were active
+	if err := s.db.Save(&streak).Error; err != nil {
+		return nil, err
+	}
+	return streak, nil
+}
+
 type StreakBadge struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
@@ -398,6 +425,22 @@ func (s *ChallengeService) SubmitChallengeAnswer(appID string, userID uuid.UUID,
 		return nil, err
 	}
 	return &challenge, nil
+}
+
+// GetCommunityAccuracy returns the % of all users who answered today's challenge correctly.
+func (s *ChallengeService) GetCommunityAccuracy(appID string, date time.Time) float64 {
+	var total int64
+	var correct int64
+	s.db.Model(&EraChallenge{}).Scopes(tenant.ForTenant(appID)).
+		Where("challenge_date = ? AND user_answer != ''", date.Truncate(24*time.Hour)).
+		Count(&total)
+	if total == 0 {
+		return 0
+	}
+	s.db.Model(&EraChallenge{}).Scopes(tenant.ForTenant(appID)).
+		Where("challenge_date = ? AND user_answer != '' AND is_correct = true", date.Truncate(24*time.Hour)).
+		Count(&correct)
+	return float64(correct) / float64(total) * 100
 }
 
 func (s *ChallengeService) GetChallengeHistory(appID string, userID uuid.UUID, limit int) ([]EraChallenge, error) {
@@ -530,4 +573,168 @@ func (a *AIAnalyzer) AnalyzeEraFromText(input string) (string, error) {
 		return "", fmt.Errorf("invalid era: %s", era)
 	}
 	return era, nil
+}
+
+// --- Photo Analysis Service ---
+
+type PhotoService struct {
+	db         *gorm.DB
+	apiURL     string
+	apiKey     string
+	httpClient *http.Client
+}
+
+func NewPhotoService(db *gorm.DB, apiURL, apiKey string) *PhotoService {
+	return &PhotoService{
+		db:         db,
+		apiURL:     apiURL,
+		apiKey:     apiKey,
+		httpClient: &http.Client{Timeout: 60 * time.Second},
+	}
+}
+
+type photoAnalysisAIResponse struct {
+	PredictedDecade string   `json:"predicted_decade"`
+	ConfidenceScore int      `json:"confidence_score"`
+	Analysis        string   `json:"analysis"`
+	Characteristics []string `json:"characteristics"`
+}
+
+// visionMessage supports multimodal content (text + image)
+type visionContentPart struct {
+	Type     string            `json:"type"`
+	Text     string            `json:"text,omitempty"`
+	ImageURL *visionImageURL   `json:"image_url,omitempty"`
+}
+
+type visionImageURL struct {
+	URL string `json:"url"`
+}
+
+type visionMessage struct {
+	Role    string              `json:"role"`
+	Content []visionContentPart `json:"content"`
+}
+
+type visionRequest struct {
+	Model    string          `json:"model"`
+	Messages []visionMessage `json:"messages"`
+}
+
+func (s *PhotoService) AnalyzePhoto(appID string, userID *uuid.UUID, imageBase64 string) (*PhotoAnalysis, error) {
+	if s.apiKey == "" {
+		return nil, errors.New("AI API key not configured")
+	}
+
+	prompt := `You are an expert photo historian and visual analyst. Analyze this photo and determine which decade it is most likely from (1920s through 2020s).
+
+Respond in STRICT JSON format:
+{
+  "predicted_decade": "1980s",
+  "confidence_score": 85,
+  "analysis": "Brief 1-2 sentence explanation of why this photo appears to be from this decade",
+  "characteristics": ["characteristic1", "characteristic2", "characteristic3"]
+}
+
+Rules:
+- predicted_decade MUST be one of: "1920s", "1930s", "1940s", "1950s", "1960s", "1970s", "1980s", "1990s", "2000s", "2010s", "2020s"
+- confidence_score is 0-100
+- characteristics should be 3-5 visual clues (clothing, technology, colors, film quality, etc.)
+- Respond with ONLY the JSON, no markdown fences`
+
+	body, err := json.Marshal(visionRequest{
+		Model: "glm-4v-plus",
+		Messages: []visionMessage{
+			{
+				Role: "user",
+				Content: []visionContentPart{
+					{
+						Type:     "image_url",
+						ImageURL: &visionImageURL{URL: imageBase64},
+					},
+					{
+						Type: "text",
+						Text: prompt,
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal vision request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", s.apiURL, bytes.NewBuffer(body))
+	if err != nil {
+		return nil, fmt.Errorf("create vision request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+s.apiKey)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("vision API request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read vision response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		slog.Error("vision API error", "status", resp.StatusCode, "body", string(respBody))
+		return nil, fmt.Errorf("vision API status %d", resp.StatusCode)
+	}
+
+	var aiResp aiResponse
+	if err := json.Unmarshal(respBody, &aiResp); err != nil {
+		return nil, fmt.Errorf("parse vision response: %w", err)
+	}
+	if len(aiResp.Choices) == 0 {
+		return nil, errors.New("no choices in vision response")
+	}
+
+	content := strings.TrimSpace(aiResp.Choices[0].Message.Content)
+	// Strip markdown code fences if present
+	content = strings.TrimPrefix(content, "```json")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	content = strings.TrimSpace(content)
+
+	var parsed photoAnalysisAIResponse
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		slog.Error("failed to parse AI photo analysis", "content", content, "error", err)
+		// Fallback: return a generic response
+		parsed = photoAnalysisAIResponse{
+			PredictedDecade: "2000s",
+			ConfidenceScore: 50,
+			Analysis:        "Unable to determine exact decade from this photo.",
+			Characteristics: []string{"analysis pending"},
+		}
+	}
+
+	// Clamp confidence
+	if parsed.ConfidenceScore < 0 {
+		parsed.ConfidenceScore = 0
+	}
+	if parsed.ConfidenceScore > 100 {
+		parsed.ConfidenceScore = 100
+	}
+
+	charsJSON, _ := json.Marshal(parsed.Characteristics)
+
+	analysis := &PhotoAnalysis{
+		AppID:           appID,
+		UserID:          userID,
+		PredictedDecade: parsed.PredictedDecade,
+		ConfidenceScore: parsed.ConfidenceScore,
+		Analysis:        parsed.Analysis,
+		Characteristics: charsJSON,
+	}
+
+	if err := s.db.Create(analysis).Error; err != nil {
+		return nil, fmt.Errorf("save photo analysis: %w", err)
+	}
+
+	return analysis, nil
 }
