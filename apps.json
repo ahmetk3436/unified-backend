@@ -238,6 +238,40 @@
       "apple_client_ids": [
         "com.ahmetcoskunkizilkaya.subtrack"
       ]
+    },
+    {
+      "app_id": "moodpulse",
+      "app_name": "MoodPulse",
+      "bundle_id": "com.ahmetcoskunkizilkaya.moodpulse",
+      "ai_provider": "none",
+      "ai_config": {},
+      "features": {
+        "apple_signin": true,
+        "subscriptions": true,
+        "ai_analysis": false,
+        "guest_mode": true
+      },
+      "revenuecat_webhook_auth": "",
+      "apple_client_ids": [
+        "com.ahmetcoskunkizilkaya.moodpulse"
+      ]
+    },
+    {
+      "app_id": "driftoff",
+      "app_name": "DriftOff",
+      "bundle_id": "com.ahmetcoskunkizilkaya.driftoff",
+      "ai_provider": "none",
+      "ai_config": {},
+      "features": {
+        "apple_signin": true,
+        "subscriptions": true,
+        "ai_analysis": false,
+        "guest_mode": true
+      },
+      "revenuecat_webhook_auth": "",
+      "apple_client_ids": [
+        "com.ahmetcoskunkizilkaya.driftoff"
+      ]
     }
   ]
 }
