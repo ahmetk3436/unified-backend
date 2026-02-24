@@ -21,6 +21,7 @@ func (p *DaiylyPlugin) Models() []interface{} {
 		&EntryAnalysis{},
 		&WeeklyReport{},
 		&DailyPromptCache{},
+		&NotificationConfigCache{},
 	}
 }
 
@@ -39,6 +40,7 @@ func (p *DaiylyPlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *con
 	router.Get("/journal/prompts", handler.GetPrompts)
 	router.Get("/journal/weekly-report", handler.GetWeeklyReport)
 	router.Get("/journal/flashbacks", handler.GetFlashbacks)
+	router.Get("/journal/notification-config", handler.GetNotificationConfig)
 
 	// Parameterized routes (MUST be last)
 	router.Get("/journal/:id", handler.Get)

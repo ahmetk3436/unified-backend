@@ -339,6 +339,25 @@ func (h *JournalHandler) GetFlashbacks(c *fiber.Ctx) error {
 	return c.JSON(flashbacks)
 }
 
+func (h *JournalHandler) GetNotificationConfig(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	config, err := h.service.GetNotificationConfig(appID, userID)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "Failed to generate notification config",
+		})
+	}
+
+	return c.JSON(config)
+}
+
 func (h *JournalHandler) AnalyzeEntry(c *fiber.Ctx) error {
 	appID := tenant.GetAppID(c)
 	userID, err := tenant.GetUserID(c)

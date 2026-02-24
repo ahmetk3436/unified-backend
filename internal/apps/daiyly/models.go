@@ -137,6 +137,18 @@ type WeeklyReport struct {
 	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
+// NotificationConfigCache stores AI-generated notification messages per user per day.
+type NotificationConfigCache struct {
+	ID           uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	AppID        string         `gorm:"size:50;not null;index" json:"app_id"`
+	UserID       uuid.UUID      `gorm:"type:uuid;index;uniqueIndex:idx_notif_cache_user_date" json:"user_id"`
+	ConfigDate   time.Time      `gorm:"type:date;uniqueIndex:idx_notif_cache_user_date" json:"config_date"`
+	MessagesJSON string         `gorm:"type:text" json:"messages_json"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
 // DailyPromptCache stores AI-generated prompts per user per day (24h cache).
 type DailyPromptCache struct {
 	ID          uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
@@ -186,4 +198,18 @@ type FlashbackEntry struct {
 
 type FlashbacksResponse struct {
 	Entries []FlashbackEntry `json:"entries"`
+}
+
+// --- Notification Config DTOs ---
+
+type NotificationMessage struct {
+	Title string `json:"title"`
+	Body  string `json:"body"`
+}
+
+type NotificationConfigResponse struct {
+	SuggestedHour   int                   `json:"suggested_hour"`
+	SuggestedMinute int                   `json:"suggested_minute"`
+	DailyMessages   []NotificationMessage `json:"daily_messages"`
+	StreakMessages   []NotificationMessage `json:"streak_messages"`
 }

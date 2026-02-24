@@ -912,3 +912,186 @@ func (s *JournalService) GetFlashbacks(appID string, userID uuid.UUID) (*Flashba
 
 	return &FlashbacksResponse{Entries: flashbacks}, nil
 }
+
+func (s *JournalService) GetNotificationConfig(appID string, userID uuid.UUID) (*NotificationConfigResponse, error) {
+	// --- 1. Calculate optimal time from user's journaling patterns ---
+	thirtyDaysAgo := time.Now().UTC().AddDate(0, 0, -30)
+	var entries []JournalEntry
+	s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ? AND entry_date >= ?", userID, thirtyDaysAgo).
+		Find(&entries)
+
+	suggestedHour := 20 // default 8 PM
+	suggestedMinute := 0
+
+	if len(entries) >= 3 {
+		// Count entries per hour
+		hourCounts := make(map[int]int)
+		for _, e := range entries {
+			h := e.EntryDate.Hour()
+			hourCounts[h]++
+		}
+		// Find peak hour
+		peakHour := 20
+		peakCount := 0
+		for h, c := range hourCounts {
+			if c > peakCount {
+				peakCount = c
+				peakHour = h
+			}
+		}
+		// Suggest 1 hour before peak (remind before they usually write)
+		suggestedHour = peakHour - 1
+		if suggestedHour < 0 {
+			suggestedHour = 23
+		}
+		suggestedMinute = 0
+	}
+
+	// --- 2. Check daily cache for messages ---
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	var cached NotificationConfigCache
+	err := s.db.Where("app_id = ? AND user_id = ? AND config_date = ?", appID, userID, today).First(&cached).Error
+	if err == nil && cached.MessagesJSON != "" {
+		var msgs struct {
+			Daily  []NotificationMessage `json:"daily"`
+			Streak []NotificationMessage `json:"streak"`
+		}
+		if err := json.Unmarshal([]byte(cached.MessagesJSON), &msgs); err == nil && len(msgs.Daily) > 0 {
+			return &NotificationConfigResponse{
+				SuggestedHour:   suggestedHour,
+				SuggestedMinute: suggestedMinute,
+				DailyMessages:   msgs.Daily,
+				StreakMessages:   msgs.Streak,
+			}, nil
+		}
+	}
+
+	// --- 3. Generate personalized messages via AI ---
+	defaultDaily := []NotificationMessage{
+		{Title: "Time to Journal", Body: "Take a moment to reflect on your day."},
+		{Title: "How was your day?", Body: "A few words can make a big difference."},
+		{Title: "Your journal awaits", Body: "What made you smile today?"},
+		{Title: "Pause and reflect", Body: "Even one sentence counts."},
+		{Title: "Evening check-in", Body: "How are you really feeling right now?"},
+		{Title: "Capture this moment", Body: "Future you will thank you for writing today."},
+		{Title: "Daily reflection time", Body: "What's on your mind tonight?"},
+	}
+	defaultStreak := []NotificationMessage{
+		{Title: "Keep your streak alive!", Body: "A quick entry is all it takes."},
+		{Title: "Don't break the chain!", Body: "Your consistency is building something great."},
+		{Title: "Streak check!", Body: "You haven't written today yet — still time!"},
+		{Title: "Almost missed today!", Body: "Just one sentence keeps your streak going."},
+		{Title: "Your streak matters", Body: "Small habits lead to big changes."},
+		{Title: "Last chance today!", Body: "A quick note keeps your journey alive."},
+		{Title: "Streak reminder", Body: "Don't let today slip by without a word."},
+	}
+
+	if s.aiAPIKey == "" || len(entries) == 0 {
+		return &NotificationConfigResponse{
+			SuggestedHour:   suggestedHour,
+			SuggestedMinute: suggestedMinute,
+			DailyMessages:   defaultDaily,
+			StreakMessages:   defaultStreak,
+		}, nil
+	}
+
+	// Build context for AI
+	var streak JournalStreak
+	streakCount := 0
+	if err := s.db.Scopes(tenant.ForTenant(appID)).Where("user_id = ?", userID).First(&streak).Error; err == nil {
+		streakCount = streak.CurrentStreak
+	}
+
+	// Recent mood summary
+	recentMoods := make(map[string]int)
+	totalScore := 0
+	for _, e := range entries {
+		if len(entries) > 10 {
+			break
+		}
+		recentMoods[e.MoodEmoji]++
+		totalScore += e.MoodScore
+	}
+	avgScore := 50
+	if len(entries) > 0 {
+		count := len(entries)
+		if count > 10 {
+			count = 10
+		}
+		avgScore = totalScore / count
+	}
+
+	topMood := ""
+	topMoodCount := 0
+	for emoji, count := range recentMoods {
+		if count > topMoodCount {
+			topMoodCount = count
+			topMood = emoji
+		}
+	}
+
+	systemPrompt := `You are a notification copywriter for a journaling app. Generate personalized push notification messages. Respond with JSON only (no markdown, no code fences):
+{"daily":[{"title":"short title","body":"short body under 60 chars"}],"streak":[{"title":"short title","body":"short body under 60 chars"}]}
+
+Rules:
+- Generate exactly 7 daily messages and 7 streak messages
+- Daily: warm, inviting, reference user's mood patterns subtly
+- Streak: urgent but friendly, motivate them to not break their chain
+- Keep titles under 30 chars, body under 60 chars
+- Vary tone: some warm, some playful, some reflective
+- Never be pushy or guilt-tripping
+- Reference their patterns naturally (e.g. "you've been feeling reflective lately")`
+
+	userContext := fmt.Sprintf("User context: %d-day streak, avg mood %d/100, top mood %s, %d entries in last 30 days",
+		streakCount, avgScore, topMood, len(entries))
+
+	content, err := s.callOpenAI(systemPrompt, userContext)
+	if err != nil {
+		return &NotificationConfigResponse{
+			SuggestedHour:   suggestedHour,
+			SuggestedMinute: suggestedMinute,
+			DailyMessages:   defaultDaily,
+			StreakMessages:   defaultStreak,
+		}, nil
+	}
+
+	var parsed struct {
+		Daily  []NotificationMessage `json:"daily"`
+		Streak []NotificationMessage `json:"streak"`
+	}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil || len(parsed.Daily) == 0 {
+		return &NotificationConfigResponse{
+			SuggestedHour:   suggestedHour,
+			SuggestedMinute: suggestedMinute,
+			DailyMessages:   defaultDaily,
+			StreakMessages:   defaultStreak,
+		}, nil
+	}
+
+	// Pad to 7 if AI returned fewer
+	for len(parsed.Daily) < 7 {
+		parsed.Daily = append(parsed.Daily, defaultDaily[len(parsed.Daily)%len(defaultDaily)])
+	}
+	for len(parsed.Streak) < 7 {
+		parsed.Streak = append(parsed.Streak, defaultStreak[len(parsed.Streak)%len(defaultStreak)])
+	}
+
+	// Cache the result
+	msgsJSON, _ := json.Marshal(parsed)
+	s.db.Where("app_id = ? AND user_id = ? AND config_date = ?", appID, userID, today).Delete(&NotificationConfigCache{})
+	s.db.Create(&NotificationConfigCache{
+		ID:           uuid.New(),
+		AppID:        appID,
+		UserID:       userID,
+		ConfigDate:   today,
+		MessagesJSON: string(msgsJSON),
+	})
+
+	return &NotificationConfigResponse{
+		SuggestedHour:   suggestedHour,
+		SuggestedMinute: suggestedMinute,
+		DailyMessages:   parsed.Daily,
+		StreakMessages:   parsed.Streak,
+	}, nil
+}
