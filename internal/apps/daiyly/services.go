@@ -51,21 +51,23 @@ func (f *ContentFilterService) FilterContent(content string) (bool, string) {
 type JournalService struct {
 	db            *gorm.DB
 	contentFilter *ContentFilterService
-	openaiKey     string
-	openaiModel   string
+	aiAPIKey      string
+	aiAPIURL      string
+	aiModel       string
 	aiTimeout     time.Duration
 }
 
-func NewJournalService(db *gorm.DB, openaiKey, openaiModel string, aiTimeout time.Duration) *JournalService {
-	model := openaiModel
-	if model == "" {
-		model = "gpt-4o-mini"
+func NewJournalService(db *gorm.DB, aiAPIKey, aiAPIURL, aiModel string, aiTimeout time.Duration) *JournalService {
+	if aiAPIURL == "" {
+		aiAPIURL = "https://api.z.ai/api/paas/v4/chat/completions"
 	}
-	timeout := aiTimeout
-	if timeout == 0 {
-		timeout = 60 * time.Second
+	if aiModel == "" {
+		aiModel = "glm-5"
 	}
-	return &JournalService{db: db, openaiKey: openaiKey, openaiModel: model, aiTimeout: timeout}
+	if aiTimeout == 0 {
+		aiTimeout = 60 * time.Second
+	}
+	return &JournalService{db: db, aiAPIKey: aiAPIKey, aiAPIURL: aiAPIURL, aiModel: aiModel, aiTimeout: aiTimeout}
 }
 
 func (s *JournalService) CreateEntry(appID string, userID uuid.UUID, req CreateJournalRequest) (*JournalEntry, error) {
@@ -116,7 +118,7 @@ func (s *JournalService) CreateEntry(appID string, userID uuid.UUID, req CreateJ
 	}
 
 	// Fire-and-forget AI analysis
-	if s.openaiKey != "" && entry.Content != "" {
+	if s.aiAPIKey != "" && entry.Content != "" {
 		go s.analyzeEntryAsync(appID, userID, entry.ID)
 	}
 
@@ -499,7 +501,7 @@ type openAIChatResponse struct {
 
 func (s *JournalService) callOpenAI(systemPrompt, userPrompt string) (string, error) {
 	reqBody := openAIChatRequest{
-		Model: s.openaiModel,
+		Model: s.aiModel,
 		Messages: []openAIMessage{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
@@ -511,12 +513,12 @@ func (s *JournalService) callOpenAI(systemPrompt, userPrompt string) (string, er
 		return "", fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", s.aiAPIURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+s.openaiKey)
+	req.Header.Set("Authorization", "Bearer "+s.aiAPIKey)
 
 	client := &http.Client{Timeout: s.aiTimeout}
 	resp, err := client.Do(req)
@@ -663,7 +665,7 @@ func (s *JournalService) GetPersonalizedPrompts(appID string, userID uuid.UUID) 
 		{Text: "How are you really feeling right now?", Category: "emotional"},
 	}
 
-	if s.openaiKey == "" {
+	if s.aiAPIKey == "" {
 		return &PromptsResponse{Prompts: genericPrompts}, nil
 	}
 
@@ -763,7 +765,7 @@ func (s *JournalService) GetWeeklyReport(appID string, userID uuid.UUID, forceRe
 		}, nil
 	}
 
-	if s.openaiKey == "" {
+	if s.aiAPIKey == "" {
 		return &WeeklyReportResponse{
 			Narrative:       fmt.Sprintf("This week you wrote %d entries with an average mood score of %d.", stats.TotalEntries, stats.AverageMoodScore),
 			KeyThemes:       []string{},

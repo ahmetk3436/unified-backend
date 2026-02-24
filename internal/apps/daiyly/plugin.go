@@ -24,7 +24,7 @@ func (p *DaiylyPlugin) Models() []interface{} {
 }
 
 func (p *DaiylyPlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *config.Config) {
-	svc := NewJournalService(db, cfg.OpenAIAPIKey, cfg.OpenAIModel, cfg.AITimeout)
+	svc := NewJournalService(db, cfg.GLMAPIKey, cfg.GLMAPIURL, cfg.GLMModel, cfg.AITimeout)
 	handler := NewJournalHandler(svc)
 
 	// Journal CRUD routes
