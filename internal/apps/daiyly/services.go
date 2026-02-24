@@ -669,6 +669,18 @@ func (s *JournalService) GetPersonalizedPrompts(appID string, userID uuid.UUID) 
 		return &PromptsResponse{Prompts: genericPrompts}, nil
 	}
 
+	// Check daily cache first
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	var cached DailyPromptCache
+	err := s.db.Where("app_id = ? AND user_id = ? AND prompt_date = ?", appID, userID, today).First(&cached).Error
+	if err == nil && cached.PromptsJSON != "" {
+		var prompts []JournalPrompt
+		if err := json.Unmarshal([]byte(cached.PromptsJSON), &prompts); err == nil && len(prompts) > 0 {
+			return &PromptsResponse{Prompts: prompts}, nil
+		}
+	}
+
+	// Cache miss — generate via AI
 	sevenDaysAgo := time.Now().UTC().AddDate(0, 0, -7)
 	var entries []JournalEntry
 	s.db.Scopes(tenant.ForTenant(appID)).Where("user_id = ? AND entry_date >= ?", userID, sevenDaysAgo).
@@ -708,6 +720,17 @@ Rules:
 	if err := json.Unmarshal([]byte(content), &parsed); err != nil || len(parsed.Prompts) == 0 {
 		return &PromptsResponse{Prompts: genericPrompts}, nil
 	}
+
+	// Save to daily cache (upsert — delete old + create new)
+	promptsJSON, _ := json.Marshal(parsed.Prompts)
+	s.db.Where("app_id = ? AND user_id = ? AND prompt_date = ?", appID, userID, today).Delete(&DailyPromptCache{})
+	s.db.Create(&DailyPromptCache{
+		ID:          uuid.New(),
+		AppID:       appID,
+		UserID:      userID,
+		PromptDate:  today,
+		PromptsJSON: string(promptsJSON),
+	})
 
 	return &PromptsResponse{Prompts: parsed.Prompts}, nil
 }

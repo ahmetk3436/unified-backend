@@ -137,6 +137,18 @@ type WeeklyReport struct {
 	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
+// DailyPromptCache stores AI-generated prompts per user per day (24h cache).
+type DailyPromptCache struct {
+	ID          uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	AppID       string         `gorm:"size:50;not null;index" json:"app_id"`
+	UserID      uuid.UUID      `gorm:"type:uuid;index;uniqueIndex:idx_prompt_cache_user_date" json:"user_id"`
+	PromptDate  time.Time      `gorm:"type:date;uniqueIndex:idx_prompt_cache_user_date" json:"prompt_date"`
+	PromptsJSON string         `gorm:"type:text" json:"prompts_json"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
 // --- AI DTOs ---
 
 type EntryAnalysisResponse struct {

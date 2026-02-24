@@ -20,6 +20,7 @@ func (p *DaiylyPlugin) Models() []interface{} {
 		&JournalStreak{},
 		&EntryAnalysis{},
 		&WeeklyReport{},
+		&DailyPromptCache{},
 	}
 }
 
