@@ -21,6 +21,8 @@ import (
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/paletteai"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/snapstreak"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/vibecheck"
+	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/driftoff"
+	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/moodpulse"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/rizzcheck"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/wouldyou"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/config"
@@ -102,6 +104,8 @@ func main() {
 		ecomonitor.New(),
 		aurascan.New(),
 		rizzcheck.New(),
+		driftoff.New(),
+		moodpulse.New(),
 	}
 
 	// Migrate plugin models
