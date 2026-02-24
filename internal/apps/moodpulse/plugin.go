@@ -18,6 +18,9 @@ func (p *MoodPulsePlugin) Models() []interface{} {
 	return []interface{}{
 		&MoodCheckIn{},
 		&MoodStreak{},
+		&CustomEmotion{},
+		&CustomTrigger{},
+		&CustomActivity{},
 	}
 }
 
@@ -35,4 +38,19 @@ func (p *MoodPulsePlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *
 	router.Get("/moods/:id", handler.Get)
 	router.Put("/moods/:id", handler.Update)
 	router.Delete("/moods/:id", handler.Delete)
+
+	// Custom vocabulary
+	vocSvc := NewVocabularyService(db)
+	vocHandler := NewVocabularyHandler(vocSvc)
+
+	router.Get("/vocabulary/emotions", vocHandler.ListEmotions)
+	router.Post("/vocabulary/emotions", vocHandler.CreateEmotion)
+	router.Delete("/vocabulary/emotions/:id", vocHandler.DeleteEmotion)
+	router.Get("/vocabulary/triggers", vocHandler.ListTriggers)
+	router.Post("/vocabulary/triggers", vocHandler.CreateTrigger)
+	router.Delete("/vocabulary/triggers/:id", vocHandler.DeleteTrigger)
+	router.Get("/vocabulary/activities", vocHandler.ListActivities)
+	router.Post("/vocabulary/activities", vocHandler.CreateActivity)
+	router.Delete("/vocabulary/activities/:id", vocHandler.DeleteActivity)
+	router.Post("/vocabulary/sync", vocHandler.BulkSync)
 }

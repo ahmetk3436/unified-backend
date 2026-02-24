@@ -383,3 +383,235 @@ func (s *MoodService) toResponse(e MoodCheckIn) *MoodEntryResponse {
 		CreatedAt:  e.CreatedAt.Format(time.RFC3339),
 	}
 }
+
+// VocabularyService handles custom vocabulary CRUD.
+type VocabularyService struct {
+	db *gorm.DB
+}
+
+func NewVocabularyService(db *gorm.DB) *VocabularyService {
+	return &VocabularyService{db: db}
+}
+
+// --- Emotions ---
+
+func (s *VocabularyService) ListEmotions(appID string, userID uuid.UUID) ([]CustomEmotion, error) {
+	var items []CustomEmotion
+	if err := s.db.Where("app_id = ? AND user_id = ?", appID, userID).Order("created_at ASC").Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (s *VocabularyService) UpsertEmotion(appID string, userID uuid.UUID, req CreateCustomEmotionRequest) (*CustomEmotion, error) {
+	if req.Name == "" || req.Emoji == "" || req.Color == "" {
+		return nil, errors.New("name, emoji, and color are required")
+	}
+	item := CustomEmotion{
+		AppID:  appID,
+		UserID: userID,
+		Name:   req.Name,
+		Emoji:  req.Emoji,
+		Color:  req.Color,
+	}
+	result := s.db.Where("app_id = ? AND user_id = ? AND name = ?", appID, userID, req.Name).First(&item)
+	if result.Error != nil && !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return nil, result.Error
+	}
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		if err := s.db.Create(&item).Error; err != nil {
+			return nil, err
+		}
+	} else {
+		item.Emoji = req.Emoji
+		item.Color = req.Color
+		if err := s.db.Save(&item).Error; err != nil {
+			return nil, err
+		}
+	}
+	return &item, nil
+}
+
+func (s *VocabularyService) DeleteEmotion(appID string, userID uuid.UUID, id uuid.UUID) error {
+	result := s.db.Where("app_id = ? AND user_id = ? AND id = ?", appID, userID, id).Delete(&CustomEmotion{})
+	if result.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return result.Error
+}
+
+// --- Triggers ---
+
+func (s *VocabularyService) ListTriggers(appID string, userID uuid.UUID) ([]CustomTrigger, error) {
+	var items []CustomTrigger
+	if err := s.db.Where("app_id = ? AND user_id = ?", appID, userID).Order("created_at ASC").Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (s *VocabularyService) UpsertTrigger(appID string, userID uuid.UUID, req CreateCustomTriggerRequest) (*CustomTrigger, error) {
+	if req.Name == "" {
+		return nil, errors.New("name is required")
+	}
+	if req.Icon == "" {
+		req.Icon = "flash-outline"
+	}
+	item := CustomTrigger{
+		AppID:  appID,
+		UserID: userID,
+		Name:   req.Name,
+		Icon:   req.Icon,
+	}
+	result := s.db.Where("app_id = ? AND user_id = ? AND name = ?", appID, userID, req.Name).First(&item)
+	if result.Error != nil && !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return nil, result.Error
+	}
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		if err := s.db.Create(&item).Error; err != nil {
+			return nil, err
+		}
+	} else {
+		item.Icon = req.Icon
+		if err := s.db.Save(&item).Error; err != nil {
+			return nil, err
+		}
+	}
+	return &item, nil
+}
+
+func (s *VocabularyService) DeleteTrigger(appID string, userID uuid.UUID, id uuid.UUID) error {
+	result := s.db.Where("app_id = ? AND user_id = ? AND id = ?", appID, userID, id).Delete(&CustomTrigger{})
+	if result.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return result.Error
+}
+
+// --- Activities ---
+
+func (s *VocabularyService) ListActivities(appID string, userID uuid.UUID) ([]CustomActivity, error) {
+	var items []CustomActivity
+	if err := s.db.Where("app_id = ? AND user_id = ?", appID, userID).Order("created_at ASC").Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (s *VocabularyService) UpsertActivity(appID string, userID uuid.UUID, req CreateCustomActivityRequest) (*CustomActivity, error) {
+	if req.Name == "" {
+		return nil, errors.New("name is required")
+	}
+	if req.Icon == "" {
+		req.Icon = "ellipse-outline"
+	}
+	item := CustomActivity{
+		AppID:  appID,
+		UserID: userID,
+		Name:   req.Name,
+		Icon:   req.Icon,
+	}
+	result := s.db.Where("app_id = ? AND user_id = ? AND name = ?", appID, userID, req.Name).First(&item)
+	if result.Error != nil && !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return nil, result.Error
+	}
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		if err := s.db.Create(&item).Error; err != nil {
+			return nil, err
+		}
+	} else {
+		item.Icon = req.Icon
+		if err := s.db.Save(&item).Error; err != nil {
+			return nil, err
+		}
+	}
+	return &item, nil
+}
+
+func (s *VocabularyService) DeleteActivity(appID string, userID uuid.UUID, id uuid.UUID) error {
+	result := s.db.Where("app_id = ? AND user_id = ? AND id = ?", appID, userID, id).Delete(&CustomActivity{})
+	if result.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return result.Error
+}
+
+// --- Bulk Sync ---
+
+func (s *VocabularyService) BulkSync(appID string, userID uuid.UUID, req BulkSyncVocabularyRequest) (*BulkSyncVocabularyResponse, error) {
+	tx := s.db.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	// Upsert emotions
+	for _, e := range req.Emotions {
+		if e.Name == "" || e.Emoji == "" || e.Color == "" {
+			continue
+		}
+		var existing CustomEmotion
+		err := tx.Where("app_id = ? AND user_id = ? AND name = ?", appID, userID, e.Name).First(&existing).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			tx.Create(&CustomEmotion{AppID: appID, UserID: userID, Name: e.Name, Emoji: e.Emoji, Color: e.Color})
+		} else if err == nil {
+			existing.Emoji = e.Emoji
+			existing.Color = e.Color
+			tx.Save(&existing)
+		}
+	}
+
+	// Upsert triggers
+	for _, t := range req.Triggers {
+		if t.Name == "" {
+			continue
+		}
+		icon := t.Icon
+		if icon == "" {
+			icon = "flash-outline"
+		}
+		var existing CustomTrigger
+		err := tx.Where("app_id = ? AND user_id = ? AND name = ?", appID, userID, t.Name).First(&existing).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			tx.Create(&CustomTrigger{AppID: appID, UserID: userID, Name: t.Name, Icon: icon})
+		} else if err == nil {
+			existing.Icon = icon
+			tx.Save(&existing)
+		}
+	}
+
+	// Upsert activities
+	for _, a := range req.Activities {
+		if a.Name == "" {
+			continue
+		}
+		icon := a.Icon
+		if icon == "" {
+			icon = "ellipse-outline"
+		}
+		var existing CustomActivity
+		err := tx.Where("app_id = ? AND user_id = ? AND name = ?", appID, userID, a.Name).First(&existing).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			tx.Create(&CustomActivity{AppID: appID, UserID: userID, Name: a.Name, Icon: icon})
+		} else if err == nil {
+			existing.Icon = icon
+			tx.Save(&existing)
+		}
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return nil, fmt.Errorf("bulk sync commit failed: %w", err)
+	}
+
+	// Fetch all after sync
+	emotions, _ := s.ListEmotions(appID, userID)
+	triggers, _ := s.ListTriggers(appID, userID)
+	activities, _ := s.ListActivities(appID, userID)
+
+	return &BulkSyncVocabularyResponse{
+		Emotions:   emotions,
+		Triggers:   triggers,
+		Activities: activities,
+	}, nil
+}

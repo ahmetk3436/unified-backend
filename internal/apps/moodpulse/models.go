@@ -117,3 +117,70 @@ type TriggerStat struct {
 	Name  string `json:"name"`
 	Count int    `json:"count"`
 }
+
+// CustomEmotion stores user-defined emotions.
+type CustomEmotion struct {
+	ID        uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	AppID     string         `gorm:"size:50;not null;uniqueIndex:idx_custom_emotion_unique" json:"app_id"`
+	UserID    uuid.UUID      `gorm:"type:uuid;uniqueIndex:idx_custom_emotion_unique" json:"user_id"`
+	Name      string         `gorm:"size:100;not null;uniqueIndex:idx_custom_emotion_unique" json:"name"`
+	Emoji     string         `gorm:"type:varchar(10);not null" json:"emoji"`
+	Color     string         `gorm:"type:varchar(10);not null" json:"color"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// CustomTrigger stores user-defined triggers.
+type CustomTrigger struct {
+	ID        uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	AppID     string         `gorm:"size:50;not null;uniqueIndex:idx_custom_trigger_unique" json:"app_id"`
+	UserID    uuid.UUID      `gorm:"type:uuid;uniqueIndex:idx_custom_trigger_unique" json:"user_id"`
+	Name      string         `gorm:"size:100;not null;uniqueIndex:idx_custom_trigger_unique" json:"name"`
+	Icon      string         `gorm:"size:100;default:'flash-outline'" json:"icon"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// CustomActivity stores user-defined activities.
+type CustomActivity struct {
+	ID        uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	AppID     string         `gorm:"size:50;not null;uniqueIndex:idx_custom_activity_unique" json:"app_id"`
+	UserID    uuid.UUID      `gorm:"type:uuid;uniqueIndex:idx_custom_activity_unique" json:"user_id"`
+	Name      string         `gorm:"size:100;not null;uniqueIndex:idx_custom_activity_unique" json:"name"`
+	Icon      string         `gorm:"size:100;default:'ellipse-outline'" json:"icon"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// --- Custom Vocabulary DTOs ---
+
+type CreateCustomEmotionRequest struct {
+	Name  string `json:"name"`
+	Emoji string `json:"emoji"`
+	Color string `json:"color"`
+}
+
+type CreateCustomTriggerRequest struct {
+	Name string `json:"name"`
+	Icon string `json:"icon"`
+}
+
+type CreateCustomActivityRequest struct {
+	Name string `json:"name"`
+	Icon string `json:"icon"`
+}
+
+type BulkSyncVocabularyRequest struct {
+	Emotions   []CreateCustomEmotionRequest  `json:"emotions"`
+	Triggers   []CreateCustomTriggerRequest  `json:"triggers"`
+	Activities []CreateCustomActivityRequest `json:"activities"`
+}
+
+type BulkSyncVocabularyResponse struct {
+	Emotions   []CustomEmotion  `json:"emotions"`
+	Triggers   []CustomTrigger  `json:"triggers"`
+	Activities []CustomActivity `json:"activities"`
+}
