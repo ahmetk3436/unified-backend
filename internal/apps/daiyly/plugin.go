@@ -18,11 +18,13 @@ func (p *DaiylyPlugin) Models() []interface{} {
 	return []interface{}{
 		&JournalEntry{},
 		&JournalStreak{},
+		&EntryAnalysis{},
+		&WeeklyReport{},
 	}
 }
 
 func (p *DaiylyPlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *config.Config) {
-	svc := NewJournalService(db)
+	svc := NewJournalService(db, cfg.OpenAIAPIKey, cfg.OpenAIModel, cfg.AITimeout)
 	handler := NewJournalHandler(svc)
 
 	// Journal CRUD routes
@@ -31,7 +33,16 @@ func (p *DaiylyPlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *con
 	router.Get("/journal/search", handler.Search)
 	router.Get("/journal/streak", handler.GetStreak)
 	router.Get("/journal/insights", handler.GetWeeklyInsights)
+
+	// AI routes (MUST come before :id catch-all)
+	router.Get("/journal/prompts", handler.GetPrompts)
+	router.Get("/journal/weekly-report", handler.GetWeeklyReport)
+	router.Get("/journal/flashbacks", handler.GetFlashbacks)
+
+	// Parameterized routes (MUST be last)
 	router.Get("/journal/:id", handler.Get)
 	router.Put("/journal/:id", handler.Update)
 	router.Delete("/journal/:id", handler.Delete)
+	router.Post("/journal/:id/analyze", handler.AnalyzeEntry)
+	router.Get("/journal/:id/analysis", handler.GetEntryAnalysis)
 }

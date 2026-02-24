@@ -1,7 +1,12 @@
 package daiyly
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -18,6 +23,7 @@ var (
 	ErrJournalNotFound      = errors.New("journal entry not found")
 	ErrNotOwner             = errors.New("you do not own this journal entry")
 	ErrContentInappropriate = errors.New("content contains inappropriate language")
+	ErrAnalysisNotFound     = errors.New("analysis not found")
 )
 
 // ContentFilterService provides content moderation functionality.
@@ -45,14 +51,21 @@ func (f *ContentFilterService) FilterContent(content string) (bool, string) {
 type JournalService struct {
 	db            *gorm.DB
 	contentFilter *ContentFilterService
+	openaiKey     string
+	openaiModel   string
+	aiTimeout     time.Duration
 }
 
-func NewJournalService(db *gorm.DB) *JournalService {
-	return &JournalService{db: db}
-}
-
-func NewJournalServiceWithFilter(db *gorm.DB, filter *ContentFilterService) *JournalService {
-	return &JournalService{db: db, contentFilter: filter}
+func NewJournalService(db *gorm.DB, openaiKey, openaiModel string, aiTimeout time.Duration) *JournalService {
+	model := openaiModel
+	if model == "" {
+		model = "gpt-4o-mini"
+	}
+	timeout := aiTimeout
+	if timeout == 0 {
+		timeout = 60 * time.Second
+	}
+	return &JournalService{db: db, openaiKey: openaiKey, openaiModel: model, aiTimeout: timeout}
 }
 
 func (s *JournalService) CreateEntry(appID string, userID uuid.UUID, req CreateJournalRequest) (*JournalEntry, error) {
@@ -96,7 +109,16 @@ func (s *JournalService) CreateEntry(appID string, userID uuid.UUID, req CreateJ
 		return nil, err
 	}
 
-	_ = s.UpdateStreak(appID, userID)
+	// Streak update is best-effort; entry was already saved
+	if err := s.UpdateStreak(appID, userID); err != nil {
+		// Non-critical: the journal entry was created successfully
+		_ = err
+	}
+
+	// Fire-and-forget AI analysis
+	if s.openaiKey != "" && entry.Content != "" {
+		go s.analyzeEntryAsync(appID, userID, entry.ID)
+	}
 
 	return &entry, nil
 }
@@ -105,7 +127,9 @@ func (s *JournalService) GetEntries(appID string, userID uuid.UUID, limit, offse
 	var entries []JournalEntry
 	var total int64
 
-	s.db.Model(&JournalEntry{}).Scopes(tenant.ForTenant(appID)).Where("user_id = ?", userID).Count(&total)
+	if err := s.db.Model(&JournalEntry{}).Scopes(tenant.ForTenant(appID)).Where("user_id = ?", userID).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 
 	err := s.db.Scopes(tenant.ForTenant(appID)).Where("user_id = ?", userID).
 		Order("entry_date DESC").
@@ -451,4 +475,415 @@ func isValidCardColor(color string) bool {
 		}
 	}
 	return false
+}
+
+// --- OpenAI Integration ---
+
+type openAIChatRequest struct {
+	Model    string          `json:"model"`
+	Messages []openAIMessage `json:"messages"`
+}
+
+type openAIMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type openAIChatResponse struct {
+	Choices []struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	} `json:"choices"`
+}
+
+func (s *JournalService) callOpenAI(systemPrompt, userPrompt string) (string, error) {
+	reqBody := openAIChatRequest{
+		Model: s.openaiModel,
+		Messages: []openAIMessage{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userPrompt},
+		},
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+s.openaiKey)
+
+	client := &http.Client{Timeout: s.aiTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("openai request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("openai returned status %d", resp.StatusCode)
+	}
+
+	var chatResp openAIChatResponse
+	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
+	if len(chatResp.Choices) == 0 {
+		return "", fmt.Errorf("no choices in response")
+	}
+
+	content := strings.TrimSpace(chatResp.Choices[0].Message.Content)
+	// Strip markdown code fences if present
+	if strings.HasPrefix(content, "```") {
+		lines := strings.Split(content, "\n")
+		if len(lines) > 2 {
+			content = strings.Join(lines[1:len(lines)-1], "\n")
+		}
+	}
+
+	return content, nil
+}
+
+// --- AI Service Methods ---
+
+func (s *JournalService) analyzeEntryAsync(appID string, userID, entryID uuid.UUID) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[daiyly] analyzeEntryAsync panic: %v", r)
+		}
+	}()
+
+	var entry JournalEntry
+	if err := s.db.First(&entry, "id = ?", entryID).Error; err != nil {
+		return
+	}
+
+	analysis := EntryAnalysis{
+		ID:      uuid.New(),
+		AppID:   appID,
+		UserID:  userID,
+		EntryID: entryID,
+		Status:  "pending",
+	}
+	if err := s.db.Create(&analysis).Error; err != nil {
+		return // unique index violation means already analyzing
+	}
+
+	systemPrompt := `You are a compassionate journal analyst. Analyze the following journal entry and respond with JSON only (no markdown, no code fences):
+{"themes":["theme1","theme2"],"sentiment_label":"positive","sentiment_score":0.5,"cognitive_patterns":[],"insight":"A brief 2-3 sentence empathetic insight."}
+
+Rules:
+- themes: 2-4 detected themes (e.g. "work stress", "family", "gratitude", "health")
+- sentiment_label: one of "positive", "negative", "neutral", "mixed"
+- sentiment_score: float from -1.0 (very negative) to 1.0 (very positive)
+- cognitive_patterns: empty array if none detected, otherwise patterns like "catastrophizing", "all-or-nothing thinking", "overgeneralization"
+- insight: warm, empathetic, non-judgmental paragraph`
+
+	userPrompt := fmt.Sprintf("Mood: %s (score: %d/100)\n\n%s", entry.MoodEmoji, entry.MoodScore, entry.Content)
+
+	content, err := s.callOpenAI(systemPrompt, userPrompt)
+	if err != nil {
+		s.db.Model(&analysis).Update("status", "failed")
+		return
+	}
+
+	var parsed struct {
+		Themes            []string `json:"themes"`
+		SentimentLabel    string   `json:"sentiment_label"`
+		SentimentScore    float64  `json:"sentiment_score"`
+		CognitivePatterns []string `json:"cognitive_patterns"`
+		Insight           string   `json:"insight"`
+	}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		s.db.Model(&analysis).Update("status", "failed")
+		return
+	}
+
+	themesJSON, _ := json.Marshal(parsed.Themes)
+	patternsJSON, _ := json.Marshal(parsed.CognitivePatterns)
+
+	s.db.Model(&analysis).Updates(map[string]interface{}{
+		"themes":             string(themesJSON),
+		"sentiment_label":    parsed.SentimentLabel,
+		"sentiment_score":    parsed.SentimentScore,
+		"cognitive_patterns": string(patternsJSON),
+		"insight":            parsed.Insight,
+		"status":             "completed",
+	})
+}
+
+func (s *JournalService) GetEntryAnalysis(appID string, userID, entryID uuid.UUID) (*EntryAnalysisResponse, error) {
+	var analysis EntryAnalysis
+	err := s.db.Where("app_id = ? AND user_id = ? AND entry_id = ?", appID, userID, entryID).First(&analysis).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrAnalysisNotFound
+		}
+		return nil, err
+	}
+
+	var themes []string
+	var patterns []string
+	json.Unmarshal([]byte(analysis.Themes), &themes)
+	json.Unmarshal([]byte(analysis.CognitivePatterns), &patterns)
+	if themes == nil {
+		themes = []string{}
+	}
+	if patterns == nil {
+		patterns = []string{}
+	}
+
+	return &EntryAnalysisResponse{
+		Themes:            themes,
+		SentimentLabel:    analysis.SentimentLabel,
+		SentimentScore:    analysis.SentimentScore,
+		CognitivePatterns: patterns,
+		Insight:           analysis.Insight,
+		Status:            analysis.Status,
+	}, nil
+}
+
+func (s *JournalService) TriggerAnalysis(appID string, userID, entryID uuid.UUID) error {
+	// Delete existing analysis if any, then re-analyze
+	s.db.Where("entry_id = ?", entryID).Delete(&EntryAnalysis{})
+	go s.analyzeEntryAsync(appID, userID, entryID)
+	return nil
+}
+
+func (s *JournalService) GetPersonalizedPrompts(appID string, userID uuid.UUID) (*PromptsResponse, error) {
+	genericPrompts := []JournalPrompt{
+		{Text: "What are you grateful for today?", Category: "gratitude"},
+		{Text: "Describe a challenge you overcame recently.", Category: "reflection"},
+		{Text: "What is one small goal for tomorrow?", Category: "goal"},
+		{Text: "How are you really feeling right now?", Category: "emotional"},
+	}
+
+	if s.openaiKey == "" {
+		return &PromptsResponse{Prompts: genericPrompts}, nil
+	}
+
+	sevenDaysAgo := time.Now().UTC().AddDate(0, 0, -7)
+	var entries []JournalEntry
+	s.db.Scopes(tenant.ForTenant(appID)).Where("user_id = ? AND entry_date >= ?", userID, sevenDaysAgo).
+		Order("entry_date DESC").Limit(10).Find(&entries)
+
+	if len(entries) == 0 {
+		return &PromptsResponse{Prompts: genericPrompts}, nil
+	}
+
+	var summary strings.Builder
+	for _, e := range entries {
+		preview := e.Content
+		if len(preview) > 150 {
+			preview = preview[:150] + "..."
+		}
+		summary.WriteString(fmt.Sprintf("- %s (mood: %s, score: %d): %s\n", e.EntryDate.Format("Jan 2"), e.MoodEmoji, e.MoodScore, preview))
+	}
+
+	systemPrompt := `You are a journaling coach. Based on the user's recent journal entries, generate 3-5 personalized journaling prompts. Respond with JSON only (no markdown, no code fences):
+{"prompts":[{"text":"prompt text under 100 chars","category":"gratitude"},{"text":"...","category":"reflection"}]}
+
+Categories: gratitude, reflection, goal, emotional
+Rules:
+- Make prompts diverse across categories
+- Reference observed mood patterns subtly
+- Keep each prompt under 100 characters
+- Be warm, encouraging, and non-judgmental`
+
+	content, err := s.callOpenAI(systemPrompt, summary.String())
+	if err != nil {
+		return &PromptsResponse{Prompts: genericPrompts}, nil
+	}
+
+	var parsed struct {
+		Prompts []JournalPrompt `json:"prompts"`
+	}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil || len(parsed.Prompts) == 0 {
+		return &PromptsResponse{Prompts: genericPrompts}, nil
+	}
+
+	return &PromptsResponse{Prompts: parsed.Prompts}, nil
+}
+
+func (s *JournalService) GetWeeklyReport(appID string, userID uuid.UUID, forceRefresh bool) (*WeeklyReportResponse, error) {
+	now := time.Now().UTC()
+	weekday := int(now.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	weekStart := now.AddDate(0, 0, -(weekday - 1)).Truncate(24 * time.Hour)
+
+	// Check cache
+	if !forceRefresh {
+		var cached WeeklyReport
+		err := s.db.Where("app_id = ? AND user_id = ? AND week_start = ?", appID, userID, weekStart).First(&cached).Error
+		if err == nil {
+			var themes []string
+			json.Unmarshal([]byte(cached.KeyThemes), &themes)
+			if themes == nil {
+				themes = []string{}
+			}
+
+			stats, _ := s.GetWeeklyInsights(appID, userID)
+			if stats == nil {
+				stats = &WeeklyInsights{}
+			}
+
+			return &WeeklyReportResponse{
+				Narrative:       cached.Narrative,
+				KeyThemes:       themes,
+				MoodExplanation: cached.MoodExplanation,
+				Suggestion:      cached.Suggestion,
+				WeekStart:       weekStart.Format("2006-01-02"),
+				Stats:           *stats,
+			}, nil
+		}
+	} else {
+		s.db.Where("app_id = ? AND user_id = ? AND week_start = ?", appID, userID, weekStart).Delete(&WeeklyReport{})
+	}
+
+	stats, err := s.GetWeeklyInsights(appID, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	if stats.TotalEntries == 0 {
+		return &WeeklyReportResponse{
+			Narrative:       "You haven't written any entries this week yet. Start journaling to get your personalized weekly summary!",
+			KeyThemes:       []string{},
+			MoodExplanation: "",
+			Suggestion:      "Try writing just one sentence about how you feel today.",
+			WeekStart:       weekStart.Format("2006-01-02"),
+			Stats:           *stats,
+		}, nil
+	}
+
+	if s.openaiKey == "" {
+		return &WeeklyReportResponse{
+			Narrative:       fmt.Sprintf("This week you wrote %d entries with an average mood score of %d.", stats.TotalEntries, stats.AverageMoodScore),
+			KeyThemes:       []string{},
+			MoodExplanation: fmt.Sprintf("Your mood trend is %s.", stats.MoodTrend),
+			Suggestion:      "Keep journaling daily to build deeper insights.",
+			WeekStart:       weekStart.Format("2006-01-02"),
+			Stats:           *stats,
+		}, nil
+	}
+
+	sevenDaysAgo := time.Now().UTC().AddDate(0, 0, -7)
+	var entries []JournalEntry
+	s.db.Scopes(tenant.ForTenant(appID)).Where("user_id = ? AND entry_date >= ?", userID, sevenDaysAgo).
+		Order("entry_date ASC").Find(&entries)
+
+	var summary strings.Builder
+	for _, e := range entries {
+		preview := e.Content
+		if len(preview) > 200 {
+			preview = preview[:200] + "..."
+		}
+		summary.WriteString(fmt.Sprintf("- %s %s (score: %d): %s\n", e.EntryDate.Format("Mon Jan 2"), e.MoodEmoji, e.MoodScore, preview))
+	}
+
+	systemPrompt := `You are a warm, insightful journaling companion. Write a weekly summary for this user. Respond with JSON only (no markdown, no code fences):
+{"narrative":"3-4 sentence warm overview of their week","key_themes":["2-4 themes"],"mood_explanation":"1-2 sentences explaining their mood pattern","suggestion":"1 specific actionable suggestion for next week"}
+
+Rules:
+- Be empathetic, warm, and encouraging
+- Reference specific patterns from their entries
+- The suggestion should be concrete and achievable
+- Never be preachy or judgmental`
+
+	statsContext := fmt.Sprintf("Stats: %d entries, avg mood %d/100, trend: %s, top mood: %s\n\nEntries:\n%s",
+		stats.TotalEntries, stats.AverageMoodScore, stats.MoodTrend, stats.TopMood, summary.String())
+
+	content, err := s.callOpenAI(systemPrompt, statsContext)
+	if err != nil {
+		return &WeeklyReportResponse{
+			Narrative:       fmt.Sprintf("This week you wrote %d entries with an average mood score of %d.", stats.TotalEntries, stats.AverageMoodScore),
+			KeyThemes:       []string{},
+			MoodExplanation: fmt.Sprintf("Your mood trend is %s.", stats.MoodTrend),
+			Suggestion:      "Keep journaling daily to build deeper insights.",
+			WeekStart:       weekStart.Format("2006-01-02"),
+			Stats:           *stats,
+		}, nil
+	}
+
+	var parsed struct {
+		Narrative       string   `json:"narrative"`
+		KeyThemes       []string `json:"key_themes"`
+		MoodExplanation string   `json:"mood_explanation"`
+		Suggestion      string   `json:"suggestion"`
+	}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		return &WeeklyReportResponse{
+			Narrative:       fmt.Sprintf("This week you wrote %d entries with an average mood score of %d.", stats.TotalEntries, stats.AverageMoodScore),
+			KeyThemes:       []string{},
+			MoodExplanation: fmt.Sprintf("Your mood trend is %s.", stats.MoodTrend),
+			Suggestion:      "Keep journaling daily to build deeper insights.",
+			WeekStart:       weekStart.Format("2006-01-02"),
+			Stats:           *stats,
+		}, nil
+	}
+
+	themesJSON, _ := json.Marshal(parsed.KeyThemes)
+	report := WeeklyReport{
+		ID:              uuid.New(),
+		AppID:           appID,
+		UserID:          userID,
+		WeekStart:       weekStart,
+		Narrative:       parsed.Narrative,
+		KeyThemes:       string(themesJSON),
+		MoodExplanation: parsed.MoodExplanation,
+		Suggestion:      parsed.Suggestion,
+	}
+	s.db.Create(&report) // best-effort cache
+
+	return &WeeklyReportResponse{
+		Narrative:       parsed.Narrative,
+		KeyThemes:       parsed.KeyThemes,
+		MoodExplanation: parsed.MoodExplanation,
+		Suggestion:      parsed.Suggestion,
+		WeekStart:       weekStart.Format("2006-01-02"),
+		Stats:           *stats,
+	}, nil
+}
+
+func (s *JournalService) GetFlashbacks(appID string, userID uuid.UUID) (*FlashbacksResponse, error) {
+	now := time.Now().UTC()
+	var flashbacks []FlashbackEntry
+
+	periods := []struct {
+		label   string
+		daysAgo int
+	}{
+		{"1 week ago", 7},
+		{"1 month ago", 30},
+		{"1 year ago", 365},
+	}
+
+	for _, p := range periods {
+		targetDate := now.AddDate(0, 0, -p.daysAgo)
+		startOfDay := targetDate.Truncate(24 * time.Hour)
+		endOfDay := startOfDay.Add(24 * time.Hour)
+
+		var entry JournalEntry
+		err := s.db.Scopes(tenant.ForTenant(appID)).
+			Where("user_id = ? AND entry_date >= ? AND entry_date < ?", userID, startOfDay, endOfDay).
+			Order("entry_date DESC").
+			First(&entry).Error
+
+		if err == nil {
+			flashbacks = append(flashbacks, FlashbackEntry{
+				Entry:   entry,
+				Period:  p.label,
+				DaysAgo: p.daysAgo,
+			})
+		}
+	}
+
+	return &FlashbacksResponse{Entries: flashbacks}, nil
 }

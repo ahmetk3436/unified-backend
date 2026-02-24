@@ -35,7 +35,7 @@ type JournalStreak struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
-var MoodEmojis = []string{"😊", "😢", "😡", "😰", "😴", "🥳", "😌", "🤔", "😍", "😤"}
+var MoodEmojis = []string{"😊", "😢", "😡", "😰", "😴", "🥳", "😌", "🤔", "😍", "😤", "😔", "😐"}
 var CardColors = []string{"#fef3c7", "#dbeafe", "#dcfce7", "#fce7f3", "#ede9fe", "#fef2f2"}
 
 // --- DTOs ---
@@ -103,4 +103,75 @@ type SearchJournalResponse struct {
 
 type DeleteJournalResponse struct {
 	Message string `json:"message"`
+}
+
+// --- AI Models ---
+
+type EntryAnalysis struct {
+	ID                uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	AppID             string         `gorm:"size:50;not null;index" json:"app_id"`
+	UserID            uuid.UUID      `gorm:"type:uuid;index" json:"user_id"`
+	EntryID           uuid.UUID      `gorm:"type:uuid;uniqueIndex" json:"entry_id"`
+	Themes            string         `gorm:"type:text" json:"themes"`
+	SentimentLabel    string         `gorm:"size:20" json:"sentiment_label"`
+	SentimentScore    float64        `json:"sentiment_score"`
+	CognitivePatterns string         `gorm:"type:text" json:"cognitive_patterns"`
+	Insight           string         `gorm:"type:text" json:"insight"`
+	Status            string         `gorm:"size:20;default:'pending'" json:"status"`
+	CreatedAt         time.Time      `json:"created_at"`
+	UpdatedAt         time.Time      `json:"updated_at"`
+	DeletedAt         gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+type WeeklyReport struct {
+	ID              uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	AppID           string         `gorm:"size:50;not null;index" json:"app_id"`
+	UserID          uuid.UUID      `gorm:"type:uuid;index;uniqueIndex:idx_weekly_report_user_week" json:"user_id"`
+	WeekStart       time.Time      `gorm:"type:date;uniqueIndex:idx_weekly_report_user_week" json:"week_start"`
+	Narrative       string         `gorm:"type:text" json:"narrative"`
+	KeyThemes       string         `gorm:"type:text" json:"key_themes"`
+	MoodExplanation string         `gorm:"type:text" json:"mood_explanation"`
+	Suggestion      string         `gorm:"type:text" json:"suggestion"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// --- AI DTOs ---
+
+type EntryAnalysisResponse struct {
+	Themes            []string `json:"themes"`
+	SentimentLabel    string   `json:"sentiment_label"`
+	SentimentScore    float64  `json:"sentiment_score"`
+	CognitivePatterns []string `json:"cognitive_patterns"`
+	Insight           string   `json:"insight"`
+	Status            string   `json:"status"`
+}
+
+type JournalPrompt struct {
+	Text     string `json:"text"`
+	Category string `json:"category"`
+}
+
+type PromptsResponse struct {
+	Prompts []JournalPrompt `json:"prompts"`
+}
+
+type WeeklyReportResponse struct {
+	Narrative       string         `json:"narrative"`
+	KeyThemes       []string       `json:"key_themes"`
+	MoodExplanation string         `json:"mood_explanation"`
+	Suggestion      string         `json:"suggestion"`
+	WeekStart       string         `json:"week_start"`
+	Stats           WeeklyInsights `json:"stats"`
+}
+
+type FlashbackEntry struct {
+	Entry   JournalEntry `json:"entry"`
+	Period  string       `json:"period"`
+	DaysAgo int          `json:"days_ago"`
+}
+
+type FlashbacksResponse struct {
+	Entries []FlashbackEntry `json:"entries"`
 }

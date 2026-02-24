@@ -280,3 +280,136 @@ func (h *JournalHandler) GetWeeklyInsights(c *fiber.Ctx) error {
 
 	return c.JSON(insights)
 }
+
+func (h *JournalHandler) GetPrompts(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	prompts, err := h.service.GetPersonalizedPrompts(appID, userID)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "Failed to generate prompts",
+		})
+	}
+
+	return c.JSON(prompts)
+}
+
+func (h *JournalHandler) GetWeeklyReport(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	forceRefresh := c.Query("refresh") == "true"
+	report, err := h.service.GetWeeklyReport(appID, userID, forceRefresh)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "Failed to generate weekly report",
+		})
+	}
+
+	return c.JSON(report)
+}
+
+func (h *JournalHandler) GetFlashbacks(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	flashbacks, err := h.service.GetFlashbacks(appID, userID)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "Failed to fetch flashbacks",
+		})
+	}
+
+	return c.JSON(flashbacks)
+}
+
+func (h *JournalHandler) AnalyzeEntry(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	entryID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
+			Error: true, Message: "Invalid entry ID",
+		})
+	}
+
+	// Verify ownership
+	if _, err := h.service.GetEntry(appID, userID, entryID); err != nil {
+		if errors.Is(err, ErrJournalNotFound) {
+			return c.Status(fiber.StatusNotFound).JSON(dto.ErrorResponse{
+				Error: true, Message: err.Error(),
+			})
+		}
+		if errors.Is(err, ErrNotOwner) {
+			return c.Status(fiber.StatusForbidden).JSON(dto.ErrorResponse{
+				Error: true, Message: err.Error(),
+			})
+		}
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "Failed to verify entry",
+		})
+	}
+
+	if err := h.service.TriggerAnalysis(appID, userID, entryID); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "Failed to trigger analysis",
+		})
+	}
+
+	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
+		"message": "Analysis started",
+	})
+}
+
+func (h *JournalHandler) GetEntryAnalysis(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	entryID, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
+			Error: true, Message: "Invalid entry ID",
+		})
+	}
+
+	analysis, err := h.service.GetEntryAnalysis(appID, userID, entryID)
+	if err != nil {
+		if errors.Is(err, ErrAnalysisNotFound) {
+			return c.Status(fiber.StatusNotFound).JSON(dto.ErrorResponse{
+				Error: true, Message: "Analysis not available yet",
+			})
+		}
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "Failed to fetch analysis",
+		})
+	}
+
+	return c.JSON(analysis)
+}
