@@ -47,6 +47,7 @@ type CreateJournalRequest struct {
 	PhotoURL  string `json:"photo_url"`
 	CardColor string `json:"card_color"`
 	IsPrivate bool   `json:"is_private"`
+	EntryDate string `json:"entry_date"` // "YYYY-MM-DD" from client's local timezone; optional
 }
 
 type UpdateJournalRequest struct {

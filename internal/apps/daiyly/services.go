@@ -94,6 +94,19 @@ func (s *JournalService) CreateEntry(appID string, userID uuid.UUID, req CreateJ
 		return nil, ErrInvalidCardColor
 	}
 
+	// Use client's local date if provided and valid (prevents timezone drift for late-night entries).
+	// Format: "YYYY-MM-DD". Falls back to server UTC if missing or invalid.
+	entryDate := time.Now().UTC()
+	if req.EntryDate != "" {
+		if parsed, err := time.Parse("2006-01-02", req.EntryDate); err == nil {
+			// Sanity: reject dates more than 1 day in the future or more than 7 days in the past
+			now := time.Now().UTC()
+			if parsed.After(now.AddDate(0, 0, -7)) && parsed.Before(now.AddDate(0, 0, 2)) {
+				entryDate = parsed
+			}
+		}
+	}
+
 	entry := JournalEntry{
 		ID:        uuid.New(),
 		AppID:     appID,
@@ -103,7 +116,7 @@ func (s *JournalService) CreateEntry(appID string, userID uuid.UUID, req CreateJ
 		Content:   req.Content,
 		PhotoURL:  req.PhotoURL,
 		CardColor: req.CardColor,
-		EntryDate: time.Now().UTC(),
+		EntryDate: entryDate,
 		IsPrivate: req.IsPrivate,
 	}
 
