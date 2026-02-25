@@ -137,3 +137,36 @@ type SleepDebtResponse struct {
 	DailyGoalHours   float64 `json:"daily_goal_hours"`
 	RollingDays      int     `json:"rolling_days"`
 }
+
+// --- Batch Import (guest-to-auth migration) ---
+
+type BatchImportRequest struct {
+	Sessions []BatchImportEntry `json:"sessions"`
+}
+
+type BatchImportEntry struct {
+	ClientID        string     `json:"client_id"`
+	Score           int        `json:"score"`
+	DurationMinutes int        `json:"duration_minutes"`
+	Efficiency      float64    `json:"efficiency"`
+	LatencyMinutes  int        `json:"latency_minutes"`
+	Bedtime         string     `json:"bedtime"`
+	WakeTime        string     `json:"wake_time"`
+	Phases          []PhaseDTO `json:"phases"`
+	Sounds          []SoundDTO `json:"sounds"`
+	AlarmPhase      string     `json:"alarm_phase"`
+	CreatedAt       string     `json:"created_at"`
+}
+
+type BatchImportResponse struct {
+	Imported int                 `json:"imported"`
+	Skipped  int                 `json:"skipped"`
+	Results  []BatchImportResult `json:"results"`
+}
+
+type BatchImportResult struct {
+	ClientID string `json:"client_id"`
+	ServerID string `json:"server_id"`
+	Status   string `json:"status"`
+	Error    string `json:"error,omitempty"`
+}

@@ -176,6 +176,33 @@ func (h *SleepHandler) GetStats(c *fiber.Ctx) error {
 	return c.JSON(resp)
 }
 
+func (h *SleepHandler) BatchImport(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
+	}
+
+	var req BatchImportRequest
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
+	}
+
+	if len(req.Sessions) == 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "no sessions provided")
+	}
+	if len(req.Sessions) > 100 {
+		return fiber.NewError(fiber.StatusBadRequest, "max 100 sessions per batch")
+	}
+
+	resp, err := h.svc.BatchImport(appID, userID, req)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "batch import failed")
+	}
+
+	return c.Status(fiber.StatusCreated).JSON(resp)
+}
+
 func (h *SleepHandler) GetSleepDebt(c *fiber.Ctx) error {
 	appID := tenant.GetAppID(c)
 	userID, err := tenant.GetUserID(c)

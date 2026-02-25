@@ -420,6 +420,89 @@ func (s *SleepService) updateStreak(appID string, userID uuid.UUID) {
 	s.db.Save(&streak)
 }
 
+func (s *SleepService) BatchImport(appID string, userID uuid.UUID, req BatchImportRequest) (*BatchImportResponse, error) {
+	resp := &BatchImportResponse{Results: []BatchImportResult{}}
+
+	for _, entry := range req.Sessions {
+		result := BatchImportResult{ClientID: entry.ClientID}
+
+		bedtime, err := time.Parse(time.RFC3339, entry.Bedtime)
+		if err != nil {
+			result.Status = "error"
+			result.Error = "invalid bedtime"
+			resp.Skipped++
+			resp.Results = append(resp.Results, result)
+			continue
+		}
+		wakeTime, err := time.Parse(time.RFC3339, entry.WakeTime)
+		if err != nil {
+			result.Status = "error"
+			result.Error = "invalid wake_time"
+			resp.Skipped++
+			resp.Results = append(resp.Results, result)
+			continue
+		}
+
+		// Dedup: check for existing session with same user + bedtime ±1 min
+		var count int64
+		s.db.Model(&SleepSession{}).
+			Scopes(tenant.ForTenant(appID)).
+			Where("user_id = ? AND bedtime BETWEEN ? AND ?", userID,
+				bedtime.Add(-1*time.Minute), bedtime.Add(1*time.Minute)).
+			Count(&count)
+		if count > 0 {
+			result.Status = "duplicate"
+			resp.Skipped++
+			resp.Results = append(resp.Results, result)
+			continue
+		}
+
+		phasesJSON, _ := json.Marshal(entry.Phases)
+		soundsJSON, _ := json.Marshal(entry.Sounds)
+
+		session := SleepSession{
+			AppID:           appID,
+			UserID:          userID,
+			Score:           entry.Score,
+			DurationMinutes: entry.DurationMinutes,
+			Efficiency:      entry.Efficiency,
+			LatencyMinutes:  entry.LatencyMinutes,
+			Bedtime:         bedtime,
+			WakeTime:        wakeTime,
+			PhasesJSON:      string(phasesJSON),
+			SoundsJSON:      string(soundsJSON),
+			AlarmPhase:      entry.AlarmPhase,
+		}
+
+		// Preserve original created_at timestamp
+		if entry.CreatedAt != "" {
+			if t, err := time.Parse(time.RFC3339, entry.CreatedAt); err == nil {
+				session.CreatedAt = t
+			}
+		}
+
+		if err := s.db.Create(&session).Error; err != nil {
+			result.Status = "error"
+			result.Error = err.Error()
+			resp.Skipped++
+			resp.Results = append(resp.Results, result)
+			continue
+		}
+
+		result.Status = "created"
+		result.ServerID = session.ID.String()
+		resp.Imported++
+		resp.Results = append(resp.Results, result)
+	}
+
+	// Update streak once after all imports
+	if resp.Imported > 0 {
+		go s.updateStreak(appID, userID)
+	}
+
+	return resp, nil
+}
+
 func (s *SleepService) toResponse(sess SleepSession) *SleepResponse {
 	var phases []PhaseDTO
 	var sounds []SoundDTO
