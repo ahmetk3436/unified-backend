@@ -41,10 +41,41 @@ func NewAuthService(db *gorm.DB, cfg *config.Config) *AuthService {
 	}
 }
 
-func (s *AuthService) Register(appID string, req *dto.RegisterRequest) (*dto.AuthResponse, error) {
-	if len(req.Email) == 0 || len(req.Password) < 8 {
-		return nil, errors.New("email required and password must be at least 8 characters")
+func validatePassword(password string) error {
+	if len(password) < 8 {
+		return errors.New("password must be at least 8 characters, contain at least one uppercase letter and one digit")
 	}
+	hasUpper := false
+	hasDigit := false
+	for _, ch := range password {
+		if ch >= 'A' && ch <= 'Z' {
+			hasUpper = true
+		}
+		if ch >= '0' && ch <= '9' {
+			hasDigit = true
+		}
+	}
+	if !hasUpper || !hasDigit {
+		return errors.New("password must be at least 8 characters, contain at least one uppercase letter and one digit")
+	}
+	return nil
+}
+
+func (s *AuthService) Register(appID string, req *dto.RegisterRequest) (*dto.AuthResponse, error) {
+	if len(req.Email) == 0 {
+		return nil, errors.New("email is required")
+	}
+	if err := validatePassword(req.Password); err != nil {
+		return nil, err
+	}
+
+	// Basic email format validation
+	email := strings.TrimSpace(req.Email)
+	atIdx := strings.Index(email, "@")
+	if atIdx < 1 || atIdx >= len(email)-1 || !strings.Contains(email[atIdx+1:], ".") {
+		return nil, errors.New("invalid email format")
+	}
+	req.Email = email
 
 	var existing models.User
 	if err := s.db.Scopes(tenant.ForTenant(appID)).Where("email = ?", req.Email).First(&existing).Error; err == nil {
@@ -88,7 +119,19 @@ func (s *AuthService) Refresh(appID string, req *dto.RefreshRequest) (*dto.AuthR
 	tokenHash := hashToken(req.RefreshToken)
 
 	var stored models.RefreshToken
-	if err := s.db.Scopes(tenant.ForTenant(appID)).Where("token_hash = ? AND revoked = false", tokenHash).First(&stored).Error; err != nil {
+	if err := s.db.Scopes(tenant.ForTenant(appID)).Where("token_hash = ?", tokenHash).First(&stored).Error; err != nil {
+		return nil, ErrInvalidToken
+	}
+
+	// Token reuse detection: if the token was already revoked, this is a replay attack.
+	// Revoke ALL tokens for this user as a safety measure.
+	if stored.Revoked {
+		slog.Warn("refresh token reuse detected, revoking all tokens for user",
+			"user_id", stored.UserID, "app_id", appID)
+		s.db.Model(&models.RefreshToken{}).
+			Scopes(tenant.ForTenant(appID)).
+			Where("user_id = ? AND revoked = false", stored.UserID).
+			Update("revoked", true)
 		return nil, ErrInvalidToken
 	}
 
@@ -97,6 +140,7 @@ func (s *AuthService) Refresh(appID string, req *dto.RefreshRequest) (*dto.AuthR
 		return nil, ErrInvalidToken
 	}
 
+	// Revoke the current token (rotation)
 	s.db.Model(&stored).Update("revoked", true)
 
 	var user models.User
@@ -115,7 +159,7 @@ func (s *AuthService) Logout(appID string, req *dto.LogoutRequest) error {
 		Update("revoked", true).Error
 }
 
-func (s *AuthService) DeleteAccount(appID string, userID uuid.UUID, password string) error {
+func (s *AuthService) DeleteAccount(appID string, userID uuid.UUID, password string, authorizationCode string, bundleID string) error {
 	var user models.User
 	if err := s.db.Scopes(tenant.ForTenant(appID)).First(&user, "id = ?", userID).Error; err != nil {
 		return ErrUserNotFound
@@ -130,11 +174,24 @@ func (s *AuthService) DeleteAccount(appID string, userID uuid.UUID, password str
 		}
 	}
 
+	// Apple token revocation (Guideline 5.1.1) — fire-and-forget, don't block deletion
+	if user.AuthProvider == "apple" && authorizationCode != "" && bundleID != "" {
+		go RevokeAppleTokens(s.cfg, bundleID, authorizationCode)
+	}
+
 	return s.db.Transaction(func(tx *gorm.DB) error {
-		tx.Where("user_id = ? AND app_id = ?", userID, appID).Delete(&models.RefreshToken{})
-		tx.Where("user_id = ? AND app_id = ?", userID, appID).Delete(&models.Subscription{})
-		tx.Where("reporter_id = ? AND app_id = ?", userID, appID).Delete(&models.Report{})
-		tx.Where("(blocker_id = ? OR blocked_id = ?) AND app_id = ?", userID, userID, appID).Delete(&models.Block{})
+		if err := tx.Where("user_id = ? AND app_id = ?", userID, appID).Delete(&models.RefreshToken{}).Error; err != nil {
+			return fmt.Errorf("delete refresh tokens: %w", err)
+		}
+		if err := tx.Where("user_id = ? AND app_id = ?", userID, appID).Delete(&models.Subscription{}).Error; err != nil {
+			return fmt.Errorf("delete subscriptions: %w", err)
+		}
+		if err := tx.Where("reporter_id = ? AND app_id = ?", userID, appID).Delete(&models.Report{}).Error; err != nil {
+			return fmt.Errorf("delete reports: %w", err)
+		}
+		if err := tx.Where("(blocker_id = ? OR blocked_id = ?) AND app_id = ?", userID, userID, appID).Delete(&models.Block{}).Error; err != nil {
+			return fmt.Errorf("delete blocks: %w", err)
+		}
 		return tx.Delete(&user).Error
 	})
 }
@@ -182,10 +239,12 @@ func (s *AuthService) AppleSignIn(appID string, bundleID string, req *dto.AppleS
 		}
 	} else {
 		if user.AppleUserID == nil {
-			s.db.Model(&user).Updates(map[string]interface{}{
+			if err := s.db.Model(&user).Updates(map[string]interface{}{
 				"apple_user_id": appleUserID,
 				"auth_provider": "apple",
-			})
+			}).Error; err != nil {
+				slog.Error("failed to update user with Apple ID", "error", err, "user_id", user.ID, "app_id", appID)
+			}
 			user.AppleUserID = &appleUserID
 			user.AuthProvider = "apple"
 		}

@@ -33,7 +33,8 @@ type UserResponse struct {
 }
 
 type DeleteAccountRequest struct {
-	Password string `json:"password"`
+	Password          string `json:"password"`
+	AuthorizationCode string `json:"authorization_code,omitempty"`
 }
 
 type AppleSignInRequest struct {

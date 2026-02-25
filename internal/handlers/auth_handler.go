@@ -125,7 +125,8 @@ func (h *AuthHandler) DeleteAccount(c *fiber.Ctx) error {
 		})
 	}
 
-	if err := h.authService.DeleteAccount(appID, userID, req.Password); err != nil {
+	bundleID := h.registry.GetBundleID(appID)
+	if err := h.authService.DeleteAccount(appID, userID, req.Password, req.AuthorizationCode, bundleID); err != nil {
 		if errors.Is(err, services.ErrInvalidCredentials) {
 			return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
 				Error: true, Message: "Incorrect password. Please try again.",

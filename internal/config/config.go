@@ -43,6 +43,11 @@ type Config struct {
 	Port        string
 	CORSOrigins string
 
+	// Apple Sign In (for token revocation on account delete)
+	AppleTeamID    string
+	AppleKeyID     string
+	ApplePrivateKey string
+
 	// App registry
 	AppsConfigPath string
 }
@@ -79,7 +84,11 @@ func Load() *Config {
 		AdminToken:   getEnv("ADMIN_TOKEN", ""),
 
 		Port:        getEnv("PORT", "8080"),
-		CORSOrigins: getEnv("CORS_ORIGINS", "*"),
+		CORSOrigins: getEnv("CORS_ORIGINS", ""),
+
+		AppleTeamID:    getEnv("APPLE_TEAM_ID", ""),
+		AppleKeyID:     getEnv("APPLE_KEY_ID", ""),
+		ApplePrivateKey: getEnv("APPLE_PRIVATE_KEY", ""),
 
 		AppsConfigPath: getEnv("APPS_CONFIG_PATH", "apps.json"),
 	}
