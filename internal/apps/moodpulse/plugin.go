@@ -31,6 +31,7 @@ func (p *MoodPulsePlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *
 	router.Post("/moods", handler.Create)
 	router.Get("/moods", handler.List)
 	router.Get("/moods/search", handler.Search)
+	router.Get("/moods/calendar", handler.Calendar)
 	router.Get("/moods/streak", handler.GetStreak)
 	router.Get("/moods/stats", handler.GetStats)
 

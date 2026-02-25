@@ -179,6 +179,19 @@ type BulkSyncVocabularyRequest struct {
 	Activities []CreateCustomActivityRequest `json:"activities"`
 }
 
+type CalendarEntry struct {
+	ID    uuid.UUID `json:"id"`
+	Date  string    `json:"date"`
+	Color string    `json:"color"`
+	Emoji string    `json:"emoji"`
+}
+
+type CalendarResponse struct {
+	Entries []CalendarEntry `json:"entries"`
+	Month   int             `json:"month"`
+	Year    int             `json:"year"`
+}
+
 type BulkSyncVocabularyResponse struct {
 	Emotions   []CustomEmotion  `json:"emotions"`
 	Triggers   []CustomTrigger  `json:"triggers"`

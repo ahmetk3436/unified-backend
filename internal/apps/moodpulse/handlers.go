@@ -45,11 +45,13 @@ func (h *MoodHandler) List(c *fiber.Ctx) error {
 
 	limit, _ := strconv.Atoi(c.Query("limit", "20"))
 	offset, _ := strconv.Atoi(c.Query("offset", "0"))
+	month, _ := strconv.Atoi(c.Query("month", "0"))
+	year, _ := strconv.Atoi(c.Query("year", "0"))
 	if limit > 100 {
 		limit = 100
 	}
 
-	resp, err := h.svc.List(appID, userID, limit, offset)
+	resp, err := h.svc.List(appID, userID, limit, offset, month, year)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "list failed")
 	}
@@ -119,6 +121,30 @@ func (h *MoodHandler) Delete(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{"message": "deleted"})
+}
+
+func (h *MoodHandler) Calendar(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
+	}
+
+	month, _ := strconv.Atoi(c.Query("month"))
+	year, _ := strconv.Atoi(c.Query("year"))
+	if month < 1 || month > 12 {
+		return fiber.NewError(fiber.StatusBadRequest, "month must be 1-12")
+	}
+	if year < 2000 || year > 2100 {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid year")
+	}
+
+	resp, err := h.svc.Calendar(appID, userID, month, year)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "calendar fetch failed")
+	}
+
+	return c.JSON(resp)
 }
 
 func (h *MoodHandler) Search(c *fiber.Ctx) error {

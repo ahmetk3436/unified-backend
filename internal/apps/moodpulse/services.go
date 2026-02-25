@@ -62,11 +62,19 @@ func (s *MoodService) Create(appID string, userID uuid.UUID, req CreateMoodReque
 	return s.toResponse(entry), nil
 }
 
-func (s *MoodService) List(appID string, userID uuid.UUID, limit, offset int) (*MoodListResponse, error) {
+func (s *MoodService) List(appID string, userID uuid.UUID, limit, offset, month, year int) (*MoodListResponse, error) {
 	var entries []MoodCheckIn
 	var total int64
 
 	base := s.db.Scopes(tenant.ForTenant(appID)).Where("user_id = ?", userID)
+
+	// Optional month/year filter for calendar efficiency
+	if month >= 1 && month <= 12 && year >= 2000 {
+		start := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
+		end := start.AddDate(0, 1, 0)
+		base = base.Where("created_at >= ? AND created_at < ?", start, end)
+	}
+
 	base.Model(&MoodCheckIn{}).Count(&total)
 
 	if err := base.Order("created_at DESC").Limit(limit).Offset(offset).Find(&entries).Error; err != nil {
@@ -81,6 +89,35 @@ func (s *MoodService) List(appID string, userID uuid.UUID, limit, offset int) (*
 	}
 	for i, e := range entries {
 		resp.Entries[i] = *s.toResponse(e)
+	}
+	return resp, nil
+}
+
+func (s *MoodService) Calendar(appID string, userID uuid.UUID, month, year int) (*CalendarResponse, error) {
+	start := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 1, 0)
+
+	var entries []MoodCheckIn
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ? AND created_at >= ? AND created_at < ?", userID, start, end).
+		Select("id, emotion_color, emotion_emoji, created_at").
+		Order("created_at ASC").
+		Find(&entries).Error; err != nil {
+		return nil, err
+	}
+
+	resp := &CalendarResponse{
+		Entries: make([]CalendarEntry, len(entries)),
+		Month:   month,
+		Year:    year,
+	}
+	for i, e := range entries {
+		resp.Entries[i] = CalendarEntry{
+			ID:    e.ID,
+			Date:  e.CreatedAt.Format("2006-01-02"),
+			Color: e.EmotionColor,
+			Emoji: e.EmotionEmoji,
+		}
 	}
 	return resp, nil
 }
