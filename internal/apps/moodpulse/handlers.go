@@ -123,6 +123,46 @@ func (h *MoodHandler) Delete(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"message": "deleted"})
 }
 
+func (h *MoodHandler) BatchCreate(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
+	}
+
+	var req BatchCreateMoodRequest
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
+	}
+
+	resp, err := h.svc.BatchCreate(appID, userID, req)
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	}
+
+	return c.Status(fiber.StatusCreated).JSON(resp)
+}
+
+func (h *MoodHandler) BatchDelete(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
+	}
+
+	var req BatchDeleteMoodRequest
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
+	}
+
+	resp, err := h.svc.BatchDelete(appID, userID, req)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "batch delete failed")
+	}
+
+	return c.JSON(resp)
+}
+
 func (h *MoodHandler) Calendar(c *fiber.Ctx) error {
 	appID := tenant.GetAppID(c)
 	userID, err := tenant.GetUserID(c)

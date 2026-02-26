@@ -173,6 +173,44 @@ type CreateCustomActivityRequest struct {
 	Icon string `json:"icon"`
 }
 
+// --- Batch Sync DTOs ---
+
+type BatchCreateMoodRequest struct {
+	Entries []BatchMoodEntry `json:"entries"`
+}
+
+type BatchMoodEntry struct {
+	ClientID   string     `json:"client_id"`
+	Emotion    EmotionDTO `json:"emotion"`
+	Intensity  int        `json:"intensity"`
+	Note       string     `json:"note"`
+	Triggers   []TagItem  `json:"triggers"`
+	Activities []TagItem  `json:"activities"`
+	CreatedAt  string     `json:"created_at"`
+}
+
+type BatchCreateMoodResponse struct {
+	Imported int               `json:"imported"`
+	Skipped  int               `json:"skipped"`
+	Results  []BatchMoodResult `json:"results"`
+}
+
+type BatchMoodResult struct {
+	ClientID string `json:"client_id"`
+	ServerID string `json:"server_id,omitempty"`
+	Status   string `json:"status"` // "created", "duplicate", "error"
+	Error    string `json:"error,omitempty"`
+}
+
+type BatchDeleteMoodRequest struct {
+	IDs []string `json:"ids"`
+}
+
+type BatchDeleteMoodResponse struct {
+	Deleted int `json:"deleted"`
+	Skipped int `json:"skipped"`
+}
+
 type BulkSyncVocabularyRequest struct {
 	Emotions   []CreateCustomEmotionRequest  `json:"emotions"`
 	Triggers   []CreateCustomTriggerRequest  `json:"triggers"`

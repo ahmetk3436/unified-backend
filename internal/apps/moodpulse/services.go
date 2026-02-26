@@ -391,6 +391,135 @@ func (s *MoodService) updateStreak(appID string, userID uuid.UUID) {
 	s.db.Save(&streak)
 }
 
+func (s *MoodService) BatchCreate(appID string, userID uuid.UUID, req BatchCreateMoodRequest) (*BatchCreateMoodResponse, error) {
+	if len(req.Entries) == 0 {
+		return &BatchCreateMoodResponse{Results: []BatchMoodResult{}}, nil
+	}
+	if len(req.Entries) > 100 {
+		return nil, errors.New("batch limit is 100 entries")
+	}
+
+	resp := &BatchCreateMoodResponse{
+		Results: make([]BatchMoodResult, 0, len(req.Entries)),
+	}
+
+	for _, item := range req.Entries {
+		result := BatchMoodResult{ClientID: item.ClientID}
+
+		// Validate
+		if item.Emotion.ID == "" || item.Emotion.Name == "" {
+			result.Status = "error"
+			result.Error = "missing emotion"
+			resp.Skipped++
+			resp.Results = append(resp.Results, result)
+			continue
+		}
+		if item.Intensity < 1 || item.Intensity > 10 {
+			result.Status = "error"
+			result.Error = "invalid intensity"
+			resp.Skipped++
+			resp.Results = append(resp.Results, result)
+			continue
+		}
+
+		// Parse created_at from client (fallback to now)
+		createdAt := time.Now()
+		if item.CreatedAt != "" {
+			if parsed, err := time.Parse(time.RFC3339, item.CreatedAt); err == nil {
+				createdAt = parsed
+			}
+		}
+
+		// Dedup: check if entry with same user + created_at (±1 min) + emotion already exists
+		var existing MoodCheckIn
+		dupStart := createdAt.Add(-1 * time.Minute)
+		dupEnd := createdAt.Add(1 * time.Minute)
+		err := s.db.Scopes(tenant.ForTenant(appID)).
+			Where("user_id = ? AND emotion_id = ? AND created_at BETWEEN ? AND ?",
+				userID, item.Emotion.ID, dupStart, dupEnd).
+			First(&existing).Error
+		if err == nil {
+			// Duplicate found
+			result.Status = "duplicate"
+			result.ServerID = existing.ID.String()
+			resp.Skipped++
+			resp.Results = append(resp.Results, result)
+			continue
+		}
+
+		triggersJSON, _ := json.Marshal(item.Triggers)
+		activitiesJSON, _ := json.Marshal(item.Activities)
+
+		entry := MoodCheckIn{
+			AppID:          appID,
+			UserID:         userID,
+			EmotionID:      item.Emotion.ID,
+			EmotionName:    item.Emotion.Name,
+			EmotionEmoji:   item.Emotion.Emoji,
+			EmotionColor:   item.Emotion.Color,
+			EmotionCustom:  item.Emotion.IsCustom,
+			Intensity:      item.Intensity,
+			Note:           item.Note,
+			TriggersJSON:   string(triggersJSON),
+			ActivitiesJSON: string(activitiesJSON),
+			CreatedAt:      createdAt,
+		}
+
+		if err := s.db.Create(&entry).Error; err != nil {
+			result.Status = "error"
+			result.Error = "db create failed"
+			resp.Skipped++
+			resp.Results = append(resp.Results, result)
+			continue
+		}
+
+		result.Status = "created"
+		result.ServerID = entry.ID.String()
+		resp.Imported++
+		resp.Results = append(resp.Results, result)
+	}
+
+	// Update streak once at end (not per entry)
+	if resp.Imported > 0 {
+		go s.updateStreak(appID, userID)
+	}
+
+	return resp, nil
+}
+
+func (s *MoodService) BatchDelete(appID string, userID uuid.UUID, req BatchDeleteMoodRequest) (*BatchDeleteMoodResponse, error) {
+	if len(req.IDs) == 0 {
+		return &BatchDeleteMoodResponse{}, nil
+	}
+	if len(req.IDs) > 100 {
+		return nil, errors.New("batch delete limit is 100 entries")
+	}
+
+	// Parse valid UUIDs
+	validIDs := make([]uuid.UUID, 0, len(req.IDs))
+	for _, raw := range req.IDs {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			continue // Skip invalid UUIDs
+		}
+		validIDs = append(validIDs, id)
+	}
+
+	if len(validIDs) == 0 {
+		return &BatchDeleteMoodResponse{Skipped: len(req.IDs)}, nil
+	}
+
+	result := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ? AND id IN ?", userID, validIDs).
+		Delete(&MoodCheckIn{})
+
+	deleted := int(result.RowsAffected)
+	return &BatchDeleteMoodResponse{
+		Deleted: deleted,
+		Skipped: len(req.IDs) - deleted,
+	}, result.Error
+}
+
 func (s *MoodService) toResponse(e MoodCheckIn) *MoodEntryResponse {
 	var triggers []TagItem
 	var activities []TagItem

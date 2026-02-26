@@ -34,6 +34,8 @@ func (p *MoodPulsePlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *
 	router.Get("/moods/calendar", handler.Calendar)
 	router.Get("/moods/streak", handler.GetStreak)
 	router.Get("/moods/stats", handler.GetStats)
+	router.Post("/moods/batch", handler.BatchCreate)
+	router.Post("/moods/batch-delete", handler.BatchDelete)
 
 	// Parameterized routes last
 	router.Get("/moods/:id", handler.Get)
