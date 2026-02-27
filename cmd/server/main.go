@@ -125,7 +125,7 @@ func main() {
 	webhookHandler := handlers.NewWebhookHandler(subscriptionService, registry)
 	moderationHandler := handlers.NewModerationHandler(moderationService)
 	legalHandler := handlers.NewLegalHandler(registry)
-	configHandler := handlers.NewRemoteConfigHandler(database.DB, registry)
+	configHandler := handlers.NewRemoteConfigHandler(database.DB)
 
 	// Seed default remote config values
 	slog.Info("seeding remote config defaults")

@@ -5,284 +5,258 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/dto"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/models"
-	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/tenant"
 	"github.com/gofiber/fiber/v2"
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
+// RemoteConfigHandler handles remote configuration operations
 type RemoteConfigHandler struct {
-	db       *gorm.DB
-	registry *tenant.Registry
+	db *gorm.DB
 }
 
-func NewRemoteConfigHandler(db *gorm.DB, registry *tenant.Registry) *RemoteConfigHandler {
-	return &RemoteConfigHandler{
-		db:       db,
-		registry: registry,
-	}
+// NewRemoteConfigHandler creates a new remote config handler
+func NewRemoteConfigHandler(db *gorm.DB) *RemoteConfigHandler {
+	return &RemoteConfigHandler{db: db}
 }
 
-// GetConfig returns app-specific configuration (public, requires X-App-ID header)
+// GetConfig returns all config for the current app (public endpoint)
+// Tenant is identified via X-App-ID header by TenantMiddleware
 func (h *RemoteConfigHandler) GetConfig(c *fiber.Ctx) error {
-	appID := c.Get("X-App-ID")
-	if appID == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
-			Error:   true,
-			Message: "X-App-ID header is required",
-		})
-	}
-
-	// Validate app exists
-	if !h.registry.Exists(appID) {
-		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
-			Error:   true,
-			Message: "Invalid X-App-ID: " + appID,
+	appID := c.Locals("app_id")
+	if appID == nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error":   true,
+			"message": "X-App-ID header is required",
 		})
 	}
 
 	var configs []models.RemoteConfig
 	if err := h.db.Where("app_id = ?", appID).Find(&configs).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
-			Error:   true,
-			Message: "Failed to fetch configuration",
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   true,
+			"message": "Database error",
 		})
 	}
 
-	// Convert to map for easier consumption
 	result := make(map[string]interface{})
+	var maxUpdated time.Time
+
 	for _, cfg := range configs {
-		var value interface{}
 		switch cfg.Type {
 		case "bool":
-			value, _ = strconv.ParseBool(cfg.Value)
+			result[cfg.Key] = cfg.Value == "true" || cfg.Value == "1"
 		case "int":
-			value, _ = strconv.Atoi(cfg.Value)
+			if v, err := strconv.Atoi(cfg.Value); err == nil {
+				result[cfg.Key] = v
+			} else {
+				result[cfg.Key] = cfg.Value
+			}
 		case "json":
-			json.Unmarshal([]byte(cfg.Value), &value)
+			var parsed interface{}
+			if err := json.Unmarshal([]byte(cfg.Value), &parsed); err == nil {
+				result[cfg.Key] = parsed
+			} else {
+				result[cfg.Key] = cfg.Value
+			}
 		default:
-			value = cfg.Value
+			result[cfg.Key] = cfg.Value
 		}
-		result[cfg.Key] = value
+		if cfg.UpdatedAt.After(maxUpdated) {
+			maxUpdated = cfg.UpdatedAt
+		}
+	}
+
+	// Add config version for cache invalidation
+	result["config_version"] = maxUpdated.Unix()
+
+	// Set cache headers
+	c.Set("Cache-Control", "public, max-age=60")
+	if !maxUpdated.IsZero() {
+		c.Set("Last-Modified", maxUpdated.UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT"))
 	}
 
 	return c.JSON(result)
 }
 
-// SetConfigKey sets or updates a config key (admin only)
+// SetConfigKey creates or updates a config value (admin only)
 func (h *RemoteConfigHandler) SetConfigKey(c *fiber.Ctx) error {
-	appID := c.Params("app_id", "")
-	if appID == "" {
-		// If no app_id in path, use from header
-		appID = c.Get("X-App-ID", "")
+	appID := c.Locals("app_id")
+	if appID == nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error":   true,
+			"message": "X-App-ID header is required",
+		})
 	}
 
-	key := c.Params("key", "")
+	key := c.Params("key")
 	if key == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
-			Error:   true,
-			Message: "Key parameter is required",
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error":   true,
+			"message": "Key is required",
 		})
 	}
 
-	var payload struct {
+	var req struct {
 		Value string `json:"value"`
-		Type  string `json:"type"` // string, bool, int, json
+		Type  string `json:"type"`
 	}
-	if err := c.BodyParser(&payload); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
-			Error:   true,
-			Message: "Invalid request body",
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error":   true,
+			"message": "Invalid request body",
 		})
 	}
 
-	if payload.Value == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
-			Error:   true,
-			Message: "Value is required",
+	if req.Value == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error":   true,
+			"message": "Value is required",
 		})
 	}
 
-	if payload.Type == "" {
-		payload.Type = "string"
+	if req.Type == "" {
+		req.Type = "string"
 	}
 
-	// Validate app exists
-	if !h.registry.Exists(appID) {
-		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
-			Error:   true,
-			Message: "Invalid app_id: " + appID,
-		})
-	}
+	var cfg models.RemoteConfig
+	result := h.db.Where("app_id = ? AND key = ?", appID, key).First(&cfg)
 
-	// Upsert config
-	var config models.RemoteConfig
-	err := h.db.Where("app_id = ? AND key = ?", appID, key).First(&config).Error
-	if err == gorm.ErrRecordNotFound {
+	if result.Error != nil {
 		// Create new
-		config = models.RemoteConfig{
-			ID:        uuid.New(),
-			AppID:     appID,
-			Key:       key,
-			Value:     payload.Value,
-			Type:      payload.Type,
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
+		cfg = models.RemoteConfig{
+			AppID: appID.(string),
+			Key:   key,
+			Value: req.Value,
+			Type:  req.Type,
 		}
-		if err := h.db.Create(&config).Error; err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
-				Error:   true,
-				Message: "Failed to create config",
+		if err := h.db.Create(&cfg).Error; err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error":   true,
+				"message": "Failed to create config",
 			})
 		}
-	} else if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
-			Error:   true,
-			Message: "Failed to query config",
-		})
 	} else {
 		// Update existing
-		config.Value = payload.Value
-		config.Type = payload.Type
-		config.UpdatedAt = time.Now()
-		if err := h.db.Save(&config).Error; err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
-				Error:   true,
-				Message: "Failed to update config",
+		if err := h.db.Model(&cfg).Updates(map[string]interface{}{
+			"value":      req.Value,
+			"type":       req.Type,
+			"updated_at": time.Now(),
+		}).Error; err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error":   true,
+				"message": "Failed to update config",
 			})
 		}
 	}
 
 	return c.JSON(fiber.Map{
-		"error":   false,
-		"message": "Config updated successfully",
-		"config": fiber.Map{
-			"app_id": config.AppID,
-			"key":    config.Key,
-			"value":  config.Value,
-			"type":   config.Type,
-		},
+		"key":        key,
+		"value":      req.Value,
+		"type":       req.Type,
+		"updated_at": cfg.UpdatedAt,
 	})
 }
 
-// DeleteConfigKey deletes a config key (admin only)
+// DeleteConfigKey removes a config key (admin only)
 func (h *RemoteConfigHandler) DeleteConfigKey(c *fiber.Ctx) error {
-	appID := c.Params("app_id", "")
-	if appID == "" {
-		appID = c.Get("X-App-ID", "")
+	appID := c.Locals("app_id")
+	if appID == nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error":   true,
+			"message": "X-App-ID header is required",
+		})
 	}
 
-	key := c.Params("key", "")
+	key := c.Params("key")
 	if key == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
-			Error:   true,
-			Message: "Key parameter is required",
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error":   true,
+			"message": "Key is required",
 		})
 	}
 
-	result := h.db.Where("app_id = ? AND key = ?", appID, key).Delete(&models.RemoteConfig{})
-	if result.Error != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
-			Error:   true,
-			Message: "Failed to delete config",
-		})
-	}
-
-	if result.RowsAffected == 0 {
-		return c.Status(fiber.StatusNotFound).JSON(dto.ErrorResponse{
-			Error:   true,
-			Message: "Config not found",
+	if err := h.db.Where("app_id = ? AND key = ?", appID, key).Delete(&models.RemoteConfig{}).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   true,
+			"message": "Failed to delete config",
 		})
 	}
 
 	return c.JSON(fiber.Map{
-		"error":   false,
-		"message": "Config deleted successfully",
+		"message": "Config key deleted",
 	})
 }
 
-// SeedDefaults creates default configuration for all apps
-func (h *RemoteConfigHandler) SeedDefaults(appRegistry map[string]string) error {
-	defaultLang := "en"
-	_ = defaultLang // Used in configs below
+// paywallConfigJSON is the default paywall config for subscription apps.
+// Edit via admin API: PUT /api/admin/config/paywall_config
+// with body: {"value": "<escaped JSON>", "type": "json"}
+const paywallConfigJSON = `{
+  "variant": "default",
+  "headline": "Unlock Everything",
+  "headline_named": "{{name}}, unlock your potential",
+  "subtitle": "Join thousands who understand their emotions better",
+  "social_proof": "50,000+ people tracking their mood",
+  "show_urgency": true,
+  "urgency_text": "Limited time offer — Save 50% today",
+  "urgency_badge": "SAVE 50%",
+  "cta_primary": "Start 7-Day Free Trial",
+  "cta_processing": "Processing...",
+  "trial_days": 7,
+  "features": [
+    {"icon": "infinite-outline",    "text": "Unlimited mood logging"},
+    {"icon": "analytics-outline",   "text": "Weekly & monthly insights"},
+    {"icon": "git-network-outline", "text": "Pattern recognition & trends"},
+    {"icon": "color-palette-outline","text": "Custom emotions & themes"},
+    {"icon": "leaf-outline",        "text": "Guided breathing exercises"},
+    {"icon": "share-social-outline","text": "Beautiful shareable cards"},
+    {"icon": "download-outline",    "text": "Export your data anytime"},
+    {"icon": "headset-outline",     "text": "Priority support"}
+  ],
+  "plans": [
+    {"id": "annual",  "label": "Annual Plan",  "price": "$29.99/year", "per_month": "$2.50/mo", "badge": "Best Value", "is_default": true},
+    {"id": "monthly", "label": "Monthly Plan", "price": "$4.99/month", "badge": null,            "is_default": false}
+  ]
+}`
+
+// subscriptionApps is the set of app IDs that use the subscription paywall.
+var subscriptionApps = map[string]bool{
+	"moodpulse": true,
+	"daiyly":    true,
+}
+
+// SeedDefaults creates default config values for all apps
+func (h *RemoteConfigHandler) SeedDefaults(appRegistry map[string]string) {
+	// appRegistry maps app_id -> app_name
+	langsJSON := `["en","tr","de","fr","es","it","pt","ru","ar","zh"]`
 
 	for appID, appName := range appRegistry {
-		configs := []map[string]interface{}{
-			{
-				"key":   "app_name",
-				"value": appName,
-				"type":  "string",
-			},
-			{
-				"key":   "default_language",
-				"value": defaultLang,
-				"type":  "string",
-			},
-			{
-				"key":   "supported_languages",
-				"value": "en,tr,de,fr,es,it,pt,ru,ar,zh",
-				"type":  "string",
-			},
-			{
-				"key":   "maintenance_mode",
-				"value": "false",
-				"type":  "bool",
-			},
-			{
-				"key":   "announcement_title",
-				"value": "",
-				"type":  "string",
-			},
-			{
-				"key":   "announcement_message",
-				"value": "",
-				"type":  "string",
-			},
+		defaults := []models.RemoteConfig{
+			{AppID: appID, Key: "app_name", Value: appName, Type: "string"},
+			{AppID: appID, Key: "default_language", Value: "en", Type: "string"},
+			{AppID: appID, Key: "supported_languages", Value: langsJSON, Type: "json"},
+			{AppID: appID, Key: "maintenance_mode", Value: "false", Type: "bool"},
+			{AppID: appID, Key: "announcement_title", Value: "", Type: "string"},
+			{AppID: appID, Key: "announcement_message", Value: "", Type: "string"},
+			{AppID: appID, Key: "announcement_type", Value: "info", Type: "string"},
+			{AppID: appID, Key: "min_app_version", Value: "1.0.0", Type: "string"},
 		}
 
-		for _, cfg := range configs {
+		// Add paywall config for subscription apps
+		if subscriptionApps[appID] {
+			defaults = append(defaults, models.RemoteConfig{
+				AppID: appID,
+				Key:   "paywall_config",
+				Value: paywallConfigJSON,
+				Type:  "json",
+			})
+		}
+
+		for _, def := range defaults {
 			var existing models.RemoteConfig
-			err := h.db.Where("app_id = ? AND key = ?", appID, cfg["key"]).First(&existing).Error
-			if err == gorm.ErrRecordNotFound {
-				newConfig := models.RemoteConfig{
-					ID:    uuid.New(),
-					AppID: appID,
-					Key:   cfg["key"].(string),
-					Value: cfg["value"].(string),
-					Type:  cfg["type"].(string),
-				}
-				if err := h.db.Create(&newConfig).Error; err != nil {
-					return err
-				}
+			if h.db.Where("app_id = ? AND key = ?", def.AppID, def.Key).First(&existing).Error != nil {
+				h.db.Create(&def)
 			}
 		}
 	}
-	return nil
-}
-
-// GetConfigByAppID returns config for a specific app (internal use)
-func (h *RemoteConfigHandler) GetConfigByAppID(appID string) (map[string]interface{}, error) {
-	var configs []models.RemoteConfig
-	if err := h.db.Where("app_id = ?", appID).Find(&configs).Error; err != nil {
-		return nil, err
-	}
-
-	result := make(map[string]interface{})
-	for _, cfg := range configs {
-		var value interface{}
-		switch cfg.Type {
-		case "bool":
-			value, _ = strconv.ParseBool(cfg.Value)
-		case "int":
-			value, _ = strconv.Atoi(cfg.Value)
-		case "json":
-			json.Unmarshal([]byte(cfg.Value), &value)
-		default:
-			value = cfg.Value
-		}
-		result[cfg.Key] = value
-	}
-	return result, nil
 }
