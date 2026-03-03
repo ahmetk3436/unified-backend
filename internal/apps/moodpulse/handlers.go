@@ -56,6 +56,9 @@ func (h *MoodHandler) List(c *fiber.Ctx) error {
 	if offset < 0 {
 		offset = 0
 	}
+	if offset > 10000 {
+		offset = 0
+	}
 
 	resp, err := h.svc.List(appID, userID, limit, offset, month, year)
 	if err != nil {

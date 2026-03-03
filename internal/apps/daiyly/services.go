@@ -79,6 +79,10 @@ func (s *JournalService) CreateEntry(appID string, userID uuid.UUID, req CreateJ
 		return nil, ErrInvalidMoodScore
 	}
 
+	if len(req.Content) > 50000 {
+		return nil, errors.New("content too long (max 50000 characters)")
+	}
+
 	// Content filtering check
 	if s.contentFilter != nil && req.Content != "" {
 		flagged, _ := s.contentFilter.FilterContent(req.Content)
@@ -174,17 +178,22 @@ func (s *JournalService) SearchEntries(appID string, userID uuid.UUID, query str
 	var entries []JournalEntry
 	var total int64
 
-	searchPattern := "%" + query + "%"
+	// Escape LIKE wildcards so user-supplied % and _ are treated as literals.
+	// The backslash escape character must be doubled first to avoid double-escaping.
+	escapedQuery := strings.ReplaceAll(query, `\`, `\\`)
+	escapedQuery = strings.ReplaceAll(escapedQuery, `%`, `\%`)
+	escapedQuery = strings.ReplaceAll(escapedQuery, `_`, `\_`)
+	searchPattern := "%" + escapedQuery + "%"
 
 	countQuery := s.db.Model(&JournalEntry{}).Scopes(tenant.ForTenant(appID)).
-		Where("user_id = ? AND (content ILIKE ? OR mood_emoji = ?)",
+		Where("user_id = ? AND (content ILIKE ? ESCAPE E'\\\\' OR mood_emoji = ?)",
 			userID, searchPattern, query)
 	if err := countQuery.Count(&total).Error; err != nil {
 		return nil, errors.New("failed to count search results")
 	}
 
 	fetchQuery := s.db.Scopes(tenant.ForTenant(appID)).
-		Where("user_id = ? AND (content ILIKE ? OR mood_emoji = ?)",
+		Where("user_id = ? AND (content ILIKE ? ESCAPE E'\\\\' OR mood_emoji = ?)",
 			userID, searchPattern, query).
 		Order("entry_date DESC").
 		Limit(limit).
@@ -223,6 +232,10 @@ func (s *JournalService) UpdateEntry(appID string, userID uuid.UUID, entryID uui
 	entry, err := s.GetEntry(appID, userID, entryID)
 	if err != nil {
 		return nil, err
+	}
+
+	if req.Content != nil && len(*req.Content) > 50000 {
+		return nil, errors.New("content too long (max 50000 characters)")
 	}
 
 	if req.Content != nil && *req.Content != "" && s.contentFilter != nil {

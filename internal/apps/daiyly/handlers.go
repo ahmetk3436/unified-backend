@@ -44,6 +44,9 @@ func (h *JournalHandler) Search(c *fiber.Ctx) error {
 	if offset < 0 {
 		offset = 0
 	}
+	if offset > 10000 {
+		offset = 0
+	}
 
 	response, err := h.service.SearchEntries(appID, userID, query, limit, offset)
 	if err != nil {
@@ -104,6 +107,12 @@ func (h *JournalHandler) List(c *fiber.Ctx) error {
 	offset, _ := strconv.Atoi(c.Query("offset", "0"))
 	if limit > 100 {
 		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > 10000 {
+		offset = 0
 	}
 
 	entries, total, err := h.service.GetEntries(appID, userID, limit, offset)

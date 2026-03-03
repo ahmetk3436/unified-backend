@@ -174,7 +174,7 @@ func main() {
 		c.Set("X-Content-Type-Options", "nosniff")
 		c.Set("X-Frame-Options", "DENY")
 		c.Set("X-XSS-Protection", "1; mode=block")
-		c.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		c.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
 		c.Set("Referrer-Policy", "strict-no-referrer")
 		return c.Next()
 	})
