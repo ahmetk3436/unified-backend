@@ -121,13 +121,21 @@ func (h *RemoteConfigHandler) SetConfigKey(c *fiber.Ctx) error {
 		req.Type = "string"
 	}
 
+	appIDStr, ok := appID.(string)
+	if !ok {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   true,
+			"message": "Internal error: invalid app context",
+		})
+	}
+
 	var cfg models.RemoteConfig
-	result := h.db.Where("app_id = ? AND key = ?", appID, key).First(&cfg)
+	result := h.db.Where("app_id = ? AND key = ?", appIDStr, key).First(&cfg)
 
 	if result.Error != nil {
 		// Create new
 		cfg = models.RemoteConfig{
-			AppID: appID.(string),
+			AppID: appIDStr,
 			Key:   key,
 			Value: req.Value,
 			Type:  req.Type,

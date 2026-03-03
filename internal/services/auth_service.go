@@ -91,8 +91,9 @@ func (s *AuthService) Register(appID string, req *dto.RegisterRequest) (*dto.Aut
 		return nil, err
 	}
 
-	// Basic email format validation
-	email := strings.TrimSpace(req.Email)
+	// Basic email format validation — normalize to lowercase to prevent duplicate accounts
+	// from the same address with mixed case (e.g. User@domain.com vs user@domain.com).
+	email := strings.ToLower(strings.TrimSpace(req.Email))
 	atIdx := strings.Index(email, "@")
 	if atIdx < 1 || atIdx >= len(email)-1 || !strings.Contains(email[atIdx+1:], ".") {
 		return nil, errors.New("invalid email format")
@@ -125,6 +126,7 @@ func (s *AuthService) Register(appID string, req *dto.RegisterRequest) (*dto.Aut
 }
 
 func (s *AuthService) Login(appID string, req *dto.LoginRequest) (*dto.AuthResponse, error) {
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 	var user models.User
 	if err := s.db.Scopes(tenant.ForTenant(appID)).Where("email = ?", req.Email).First(&user).Error; err != nil {
 		// Always run bcrypt even when user not found to equalize response time.
@@ -265,9 +267,9 @@ func (s *AuthService) AppleSignIn(appID string, bundleID string, req *dto.AppleS
 	}
 
 	appleUserID := claims.Sub
-	email := claims.Email
+	email := strings.ToLower(strings.TrimSpace(claims.Email))
 	if email == "" {
-		email = req.Email
+		email = strings.ToLower(strings.TrimSpace(req.Email))
 	}
 	if email == "" {
 		email = appleUserID + "@privaterelay.appleid.com"
