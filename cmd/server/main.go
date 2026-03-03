@@ -14,16 +14,18 @@ import (
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/aurascan"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/confessit"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/daiyly"
+	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/driftoff"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/ecomonitor"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/eracheck"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/feelsy"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/mewify"
-	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/paletteai"
-	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/snapstreak"
-	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/vibecheck"
-	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/driftoff"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/moodpulse"
+	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/moodtracker"
+	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/paletteai"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/rizzcheck"
+	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/snapstreak"
+	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/streakkeeper"
+	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/vibecheck"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/wouldyou"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/config"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/database"
@@ -90,22 +92,24 @@ func main() {
 	subscriptionService := services.NewSubscriptionService(database.DB)
 	moderationService := services.NewModerationService(database.DB)
 
-	// Register plugins (all 11 apps)
+	// Register plugins (all 14 apps)
 	plugins := []apps.Plugin{
-		eracheck.New(moderationService),
-		mewify.New(),
-		paletteai.New(),
-		snapstreak.New(),
-		daiyly.New(),
-		vibecheck.New(),
-		feelsy.New(moderationService),
-		wouldyou.New(),
-		confessit.New(),
-		ecomonitor.New(),
 		aurascan.New(),
-		rizzcheck.New(),
+		confessit.New(),
+		daiyly.New(),
 		driftoff.New(),
+		ecomonitor.New(),
+		eracheck.New(moderationService),
+		feelsy.New(moderationService),
+		mewify.New(),
 		moodpulse.New(),
+		moodtracker.New(),
+		paletteai.New(),
+		rizzcheck.New(),
+		snapstreak.New(),
+		streakkeeper.New(),
+		vibecheck.New(),
+		wouldyou.New(),
 	}
 
 	// Migrate plugin models
@@ -147,8 +151,12 @@ func main() {
 
 	// Fiber app
 	app := fiber.New(fiber.Config{
-		BodyLimit:    4 * 1024 * 1024,
-		ErrorHandler: customErrorHandler,
+		BodyLimit:               4 * 1024 * 1024,
+		ErrorHandler:            customErrorHandler,
+		// Only trust X-Forwarded-For from known proxy (Coolify nginx on same host)
+		EnableTrustedProxyCheck: true,
+		TrustedProxies:          []string{"127.0.0.1", "::1"},
+		ProxyHeader:             fiber.HeaderXForwardedFor,
 	})
 
 	// Sentry middleware
@@ -168,6 +176,8 @@ func main() {
 		c.Set("X-Content-Type-Options", "nosniff")
 		c.Set("X-Frame-Options", "DENY")
 		c.Set("X-XSS-Protection", "1; mode=block")
+		c.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		c.Set("Referrer-Policy", "strict-no-referrer")
 		return c.Next()
 	})
 	app.Use(middleware.TenantMiddleware(registry))

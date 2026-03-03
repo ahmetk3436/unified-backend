@@ -9,7 +9,7 @@ import (
 
 func JWTProtected(cfg *config.Config) fiber.Handler {
 	return jwtware.New(jwtware.Config{
-		SigningKey: jwtware.SigningKey{Key: []byte(cfg.JWTSecret)},
+		SigningKey: jwtware.SigningKey{JWTAlg: "HS256", Key: []byte(cfg.JWTSecret)},
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
 			return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
 				Error:   true,

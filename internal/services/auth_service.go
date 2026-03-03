@@ -27,6 +27,19 @@ var (
 	ErrUserNotFound       = errors.New("user not found")
 )
 
+// dummyHash is a precomputed bcrypt hash used to equalize login timing
+// when the requested email does not exist, preventing account enumeration
+// via response-time analysis (unknown email ~1ms vs wrong password ~150ms).
+var dummyHash []byte
+
+func init() {
+	var err error
+	dummyHash, err = bcrypt.GenerateFromPassword([]byte("dummy-timing-equalization-v1"), 12)
+	if err != nil {
+		panic("failed to generate dummy bcrypt hash: " + err.Error())
+	}
+}
+
 type AuthService struct {
 	db        *gorm.DB
 	cfg       *config.Config
@@ -85,7 +98,7 @@ func (s *AuthService) Register(appID string, req *dto.RegisterRequest) (*dto.Aut
 		return nil, ErrEmailTaken
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), 12)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash password: %w", err)
 	}
@@ -108,7 +121,11 @@ func (s *AuthService) Register(appID string, req *dto.RegisterRequest) (*dto.Aut
 func (s *AuthService) Login(appID string, req *dto.LoginRequest) (*dto.AuthResponse, error) {
 	var user models.User
 	if err := s.db.Scopes(tenant.ForTenant(appID)).Where("email = ?", req.Email).First(&user).Error; err != nil {
-		slog.Warn("login failed", "email", req.Email, "app_id", appID)
+		// Always run bcrypt even when user not found to equalize response time.
+		// Without this, an attacker can distinguish "no such email" (~1ms) from
+		// "wrong password" (~150ms) by measuring response latency.
+		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(req.Password))
+		slog.Warn("login failed: user not found", "app_id", appID)
 		return nil, ErrInvalidCredentials
 	}
 

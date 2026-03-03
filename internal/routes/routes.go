@@ -1,6 +1,8 @@
 package routes
 
 import (
+	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps"
@@ -51,15 +53,39 @@ func Setup(
 		Max:               10,
 		Expiration:        1 * time.Minute,
 		LimiterMiddleware: limiter.SlidingWindow{},
-		KeyGenerator:      func(c *fiber.Ctx) string { return c.IP() },
+		// c.IP() is now safe: TrustedProxies in main.go ensures real client IP
+		KeyGenerator: func(c *fiber.Ctx) string { return c.IP() },
 	}))
 	auth.Post("/register", authHandler.Register)
-	auth.Post("/login", authHandler.Login)
+
+	// Login gets an additional per-email limiter (5 attempts/min per email).
+	// IP-based limits alone can be bypassed via X-Forwarded-For spoofing, but
+	// per-email limits cannot — attackers can't spoof the target account's email.
+	loginEmailLimiter := limiter.New(limiter.Config{
+		Max:               5,
+		Expiration:        1 * time.Minute,
+		LimiterMiddleware: limiter.SlidingWindow{},
+		KeyGenerator: func(c *fiber.Ctx) string {
+			var body struct {
+				Email string `json:"email"`
+			}
+			if err := json.Unmarshal(c.Body(), &body); err == nil && body.Email != "" {
+				return "login:email:" + strings.ToLower(strings.TrimSpace(body.Email))
+			}
+			return "login:ip:" + c.IP()
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+				"error":   true,
+				"message": "Too many login attempts. Please try again later.",
+			})
+		},
+	})
+	auth.Post("/login", loginEmailLimiter, authHandler.Login)
 	auth.Post("/refresh", authHandler.Refresh)
 	auth.Post("/apple", authHandler.AppleSignIn)
 
 	// Protected routes (JWT required) - apply middleware to individual routes
-	// This prevents JWT middleware from affecting public routes
 	api.Post("/auth/logout", middleware.JWTProtected(cfg), authHandler.Logout)
 	api.Delete("/auth/account", middleware.JWTProtected(cfg), authHandler.DeleteAccount)
 
@@ -74,8 +100,8 @@ func Setup(
 	admin.Put("/moderation/reports/:id", moderationHandler.ActionReport)
 
 	// Admin config management (protected + admin required)
-	admin.Put("/config/:app_id/:key", configHandler.SetConfigKey)
-	admin.Delete("/config/:app_id/:key", configHandler.DeleteConfigKey)
+	admin.Put("/config/:key", configHandler.SetConfigKey)
+	admin.Delete("/config/:key", configHandler.DeleteConfigKey)
 
 	// Webhooks — per-app auth via :app_id path param (no JWT)
 	webhooks := api.Group("/webhooks")
