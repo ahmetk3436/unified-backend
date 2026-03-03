@@ -1131,7 +1131,7 @@ func (s *MoodService) GetMoodDrivers(appID string, userID uuid.UUID, days int) (
 		"top_positive":  topPositive,
 		"top_negative":  topNegative,
 		"total_entries": len(entries),
-		"days_analyzed": 90,
+		"days_analyzed": days,
 	}, nil
 }
 
