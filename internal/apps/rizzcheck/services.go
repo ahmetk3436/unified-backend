@@ -2,11 +2,12 @@ package rizzcheck
 
 import (
 	"bytes"
+	crand "crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
-	"math/rand"
+	"math/big"
 	"net/http"
 	"strings"
 	"time"
@@ -336,6 +337,20 @@ Return JSON:
 	return gen.Response1, gen.Response2, gen.Response3, nil
 }
 
+// cryptoPerm3 returns a Fisher-Yates shuffle of [0,1,2] using crypto/rand.
+func cryptoPerm3() [3]int {
+	arr := [3]int{0, 1, 2}
+	for i := 2; i > 0; i-- {
+		jn, err := crand.Int(crand.Reader, big.NewInt(int64(i+1)))
+		if err != nil {
+			continue
+		}
+		j := int(jn.Int64())
+		arr[i], arr[j] = arr[j], arr[i]
+	}
+	return arr
+}
+
 // templateFallback generates basic responses when all LLM providers fail.
 func (s *RizzService) templateFallback(inputText, tone string) (string, string, string) {
 	templates := map[string][3]string{
@@ -382,8 +397,8 @@ func (s *RizzService) templateFallback(inputText, tone string) (string, string, 
 	}
 
 	if t, ok := templates[tone]; ok {
-		// Shuffle order for variety
-		idx := rand.Perm(3)
+		// Shuffle order for variety using crypto/rand Fisher-Yates.
+		idx := cryptoPerm3()
 		return t[idx[0]], t[idx[1]], t[idx[2]]
 	}
 

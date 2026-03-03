@@ -2,7 +2,7 @@ package ecomonitor
 
 import (
 	"errors"
-	"log"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -179,7 +179,7 @@ func (h *SatelliteHandler) GenerateAnalysis(c *fiber.Ctx) error {
 	}
 
 	if err := h.historyService.RecordAnalysis(appID, userID, coordinateID, "satellite", results); err != nil {
-		log.Printf("Failed to record analysis history: %v", err)
+		slog.Warn("failed to record analysis history", "error", err, "app_id", appID, "user_id", userID)
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"message": "Analysis generated successfully", "data": results})

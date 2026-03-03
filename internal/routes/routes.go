@@ -83,7 +83,34 @@ func Setup(
 	})
 	auth.Post("/login", loginEmailLimiter, authHandler.Login)
 	auth.Post("/refresh", authHandler.Refresh)
-	auth.Post("/apple", authHandler.AppleSignIn)
+
+	// Apple Sign In gets an additional per-token limiter (5 attempts/min per token prefix)
+	// to prevent rapid replay of stolen Apple identity tokens.
+	appleSignInLimiter := limiter.New(limiter.Config{
+		Max:               5,
+		Expiration:        1 * time.Minute,
+		LimiterMiddleware: limiter.SlidingWindow{},
+		KeyGenerator: func(c *fiber.Ctx) string {
+			var body struct {
+				IdentityToken string `json:"identity_token"`
+			}
+			if err := json.Unmarshal(c.Body(), &body); err == nil && len(body.IdentityToken) > 0 {
+				tok := body.IdentityToken
+				if len(tok) > 32 {
+					tok = tok[:32]
+				}
+				return "apple:tok:" + tok
+			}
+			return "apple:ip:" + c.IP()
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+				"error":   true,
+				"message": "Too many sign-in attempts. Please try again later.",
+			})
+		},
+	})
+	auth.Post("/apple", appleSignInLimiter, authHandler.AppleSignIn)
 
 	// Protected routes (JWT required) - apply middleware to individual routes
 	api.Post("/auth/logout", middleware.JWTProtected(cfg), authHandler.Logout)
@@ -95,7 +122,20 @@ func Setup(
 	api.Delete("/blocks/:id", middleware.JWTProtected(cfg), moderationHandler.UnblockUser)
 
 	// Admin moderation panel (protected + admin required)
-	admin := api.Group("/admin", middleware.JWTProtected(cfg), middleware.AdminRequired(db, cfg))
+	// Strict rate limiter (10 req/min per IP) protects admin token brute-force.
+	adminLimiter := limiter.New(limiter.Config{
+		Max:               10,
+		Expiration:        1 * time.Minute,
+		LimiterMiddleware: limiter.SlidingWindow{},
+		KeyGenerator:      func(c *fiber.Ctx) string { return c.IP() },
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+				"error":   true,
+				"message": "Too many requests. Please try again later.",
+			})
+		},
+	})
+	admin := api.Group("/admin", adminLimiter, middleware.JWTProtected(cfg), middleware.AdminRequired(db, cfg))
 	admin.Get("/moderation/reports", moderationHandler.ListReports)
 	admin.Put("/moderation/reports/:id", moderationHandler.ActionReport)
 

@@ -227,7 +227,6 @@ func (h *ChallengeHandler) GenerateQuestions(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": true, "message": "Failed to generate questions",
-			"details": err.Error(),
 		})
 	}
 
@@ -261,7 +260,6 @@ func (h *ChallengeHandler) GenerateAllCategories(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": true, "message": "Failed to generate questions",
-			"details": err.Error(),
 		})
 	}
 
@@ -289,9 +287,10 @@ func extractIdentity(c *fiber.Ctx) (uuid.UUID, string) {
 	if uid, ok := c.Locals("userID").(uuid.UUID); ok {
 		userID = uid
 	} else if token, ok := c.Locals("user").(*jwt.Token); ok {
-		claims := token.Claims.(jwt.MapClaims)
-		if sub, ok := claims["sub"].(string); ok {
-			userID, _ = uuid.Parse(sub)
+		if claims, ok := token.Claims.(jwt.MapClaims); ok {
+			if sub, ok := claims["sub"].(string); ok {
+				userID, _ = uuid.Parse(sub)
+			}
 		}
 	}
 

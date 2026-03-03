@@ -51,6 +51,10 @@ func main() {
 		slog.Error("JWT_SECRET environment variable is required")
 		os.Exit(1)
 	}
+	if len(cfg.JWTSecret) < 32 {
+		slog.Error("JWT_SECRET must be at least 32 characters to ensure sufficient entropy")
+		os.Exit(1)
+	}
 	if cfg.DBPassword == "" {
 		slog.Error("DB_PASSWORD environment variable is required")
 		os.Exit(1)
@@ -142,6 +146,14 @@ func main() {
 			EnableTracing:    true,
 			TracesSampleRate: 0.2,
 			Environment:      os.Getenv("APP_ENV"),
+			// Scrub request body from error events to prevent passwords/tokens
+			// from being transmitted to Sentry (OWASP A02 data exposure).
+			BeforeSend: func(event *sentry.Event, hint *sentry.EventHint) *sentry.Event {
+				if event.Request != nil {
+					event.Request.Data = "[scrubbed]"
+				}
+				return event
+			},
 		}); err != nil {
 			slog.Error("sentry init failed", "error", err)
 		} else {
@@ -157,6 +169,10 @@ func main() {
 		EnableTrustedProxyCheck: true,
 		TrustedProxies:          []string{"127.0.0.1", "::1"},
 		ProxyHeader:             fiber.HeaderXForwardedFor,
+		// Explicit timeouts prevent slow-client (Slowloris) attacks.
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	})
 
 	// Sentry middleware

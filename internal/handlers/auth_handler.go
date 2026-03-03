@@ -173,14 +173,15 @@ func (h *AuthHandler) AppleSignIn(c *fiber.Ctx) error {
 	bundleID := h.registry.GetBundleID(appID)
 	if bundleID == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
-			Error: true, Message: "Apple Sign In not configured for this app",
+			Error: true, Message: "Sign-in not available",
 		})
 	}
 
 	resp, err := h.authService.AppleSignIn(appID, bundleID, &req)
 	if err != nil {
+		slog.Error("apple sign-in failed", "app", appID, "error", err)
 		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
-			Error: true, Message: err.Error(),
+			Error: true, Message: "Authentication failed",
 		})
 	}
 

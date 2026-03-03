@@ -2,13 +2,14 @@ package aurascan
 
 import (
 	"bytes"
+	crand "crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log"
-	"math/rand"
+	"log/slog"
+	"math/big"
 	"net/http"
 	"strings"
 	"time"
@@ -152,7 +153,7 @@ func (s *AuraService) Create(appID string, userID uuid.UUID, req CreateAuraReque
 	// Attempt AI analysis
 	analysis, err := s.analyzeAura(imageData, imageURL)
 	if err != nil {
-		log.Printf("[WARN] AI analysis failed for user %s: %v, falling back to deterministic", userID, err)
+		slog.Warn("AI analysis failed, falling back to deterministic", "user_id", userID, "error", err)
 		fallback := deterministicAuraResult(userID, imageURL)
 		analysis = &fallback
 	}
@@ -201,7 +202,7 @@ func (s *AuraService) analyzeAura(imageData, imageURL string) (*auraAnalysisResu
 		if err == nil {
 			return result, nil
 		}
-		log.Printf("[WARN] GLM analysis failed: %v", err)
+		slog.Warn("GLM analysis failed", "error", err)
 	}
 
 	if s.cfg.DeepSeekAPIKey != "" {
@@ -209,7 +210,7 @@ func (s *AuraService) analyzeAura(imageData, imageURL string) (*auraAnalysisResu
 		if err == nil {
 			return result, nil
 		}
-		log.Printf("[WARN] DeepSeek analysis failed: %v", err)
+		slog.Warn("DeepSeek analysis failed", "error", err)
 	}
 
 	return nil, errors.New("no AI provider available")
@@ -536,18 +537,27 @@ func (s *AuraMatchService) Create(appID string, userID uuid.UUID, req CreateMatc
 	}, nil
 }
 
+// cryptoRandN returns a cryptographically secure random integer in [0, max).
+func cryptoRandN(max int) int {
+	n, err := crand.Int(crand.Reader, big.NewInt(int64(max)))
+	if err != nil {
+		return 0
+	}
+	return int(n.Int64())
+}
+
 func (s *AuraMatchService) calculateCompatibility(userColor, friendColor string) (int, string, string, string) {
 	var score int
 	var matchType string
 
 	if userColor == friendColor {
-		score = 85 + rand.Intn(16)
+		score = 85 + cryptoRandN(16)
 		matchType = "same"
 	} else if complementaryColors[userColor] == friendColor {
-		score = 70 + rand.Intn(21)
+		score = 70 + cryptoRandN(21)
 		matchType = "complementary"
 	} else {
-		score = 50 + rand.Intn(26)
+		score = 50 + cryptoRandN(26)
 		matchType = "neutral"
 	}
 

@@ -19,12 +19,8 @@ type Plugin interface {
 	RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *config.Config)
 }
 
-// AdminPlugin extends Plugin with admin-specific route registration.
-// Plugins that implement this interface can register additional admin-only routes.
+// AdminPlugin is an optional interface that plugins can implement to register
+// routes on the admin group (JWT + AdminRequired middleware).
 type AdminPlugin interface {
-	Plugin
-
-	// RegisterAdminRoutes mounts admin-only routes on the given Fiber group.
-	// The group has both JWT and Admin middleware applied.
-	RegisterAdminRoutes(router fiber.Router, db *gorm.DB, cfg *config.Config)
+	RegisterAdminRoutes(admin fiber.Router, db *gorm.DB, cfg *config.Config)
 }

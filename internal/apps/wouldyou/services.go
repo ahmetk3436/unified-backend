@@ -2,12 +2,13 @@ package wouldyou
 
 import (
 	"bytes"
+	crand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log"
-	"math/rand"
+	"log/slog"
+	"math/big"
 	"net/http"
 	"strings"
 	"time"
@@ -62,7 +63,11 @@ func (s *ChallengeService) GetDailyChallenge(appID string) (*Challenge, error) {
 		}
 	}
 
-	idx := available[rand.Intn(len(available))]
+	n, err := crand.Int(crand.Reader, big.NewInt(int64(len(available))))
+	if err != nil {
+		n = big.NewInt(0)
+	}
+	idx := available[int(n.Int64())]
 	c := DailyChallenges[idx]
 
 	challenge = Challenge{
@@ -93,10 +98,10 @@ func (s *ChallengeService) GetChallengesByCategory(appID string, category string
 	query.Find(&challenges)
 
 	if len(challenges) < 5 && s.questionGenerator != nil && s.questionGenerator.IsAvailable() {
-		log.Printf("Low challenge count for category %s (%d), generating more...", category, len(challenges))
+		slog.Info("low challenge count, generating more", "category", category, "count", len(challenges))
 		_, genErr := s.questionGenerator.GenerateBatch(appID, category, 10)
 		if genErr != nil {
-			log.Printf("Failed to generate challenges for category %s: %v", category, genErr)
+			slog.Warn("failed to generate challenges", "category", category, "error", genErr)
 		} else {
 			challenges = nil
 			query = s.db.Scopes(tenant.ForTenant(appID)).Where("category = ?", category).Order("created_at DESC")
@@ -555,7 +560,7 @@ Make sure each question is unique and creative. Return ONLY the JSON array, noth
 		return nil, fmt.Errorf("failed to save challenges to database: %w", err)
 	}
 
-	log.Printf("Successfully generated and saved %d questions for category: %s", len(challenges), category)
+	slog.Info("generated and saved questions", "count", len(challenges), "category", category)
 	return challenges, nil
 }
 

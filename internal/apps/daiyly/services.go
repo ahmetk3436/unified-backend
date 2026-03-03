@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -159,6 +159,9 @@ func (s *JournalService) SearchEntries(appID string, userID uuid.UUID, query str
 	query = strings.TrimSpace(query)
 	if len(query) < 2 {
 		return nil, errors.New("search query must be at least 2 characters")
+	}
+	if len(query) > 100 {
+		query = query[:100]
 	}
 
 	if limit <= 0 || limit > 100 {
@@ -569,7 +572,7 @@ func (s *JournalService) callOpenAI(systemPrompt, userPrompt string) (string, er
 func (s *JournalService) analyzeEntryAsync(appID string, userID, entryID uuid.UUID) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[daiyly] analyzeEntryAsync panic: %v", r)
+			slog.Warn("[daiyly] analyzeEntryAsync panic", "panic", r)
 		}
 	}()
 

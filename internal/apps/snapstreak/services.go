@@ -3,6 +3,7 @@ package snapstreak
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/tenant"
@@ -53,7 +54,7 @@ func (s *SnapService) CreateSnap(appID string, userID uuid.UUID, imageURL string
 
 	// Update streak after successful snap creation
 	if err := s.updateStreak(appID, userID); err != nil {
-		fmt.Printf("warning: failed to update streak for user %s: %v\n", userID, err)
+		slog.Warn("failed to update streak", "user_id", userID, "error", err)
 	}
 
 	return &snap, nil

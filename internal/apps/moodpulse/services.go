@@ -190,6 +190,9 @@ func (s *MoodService) Delete(appID string, userID uuid.UUID, id uuid.UUID) error
 
 func (s *MoodService) Search(appID string, userID uuid.UUID, q string) (*SearchMoodResponse, error) {
 	q = strings.TrimSpace(q)
+	if len(q) > 100 {
+		q = q[:100]
+	}
 	pattern := "%" + strings.ToLower(q) + "%"
 
 	var entries []MoodCheckIn

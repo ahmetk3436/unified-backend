@@ -2,6 +2,7 @@ package services
 
 import (
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -14,6 +15,9 @@ import (
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/config"
 	"github.com/golang-jwt/jwt/v5"
 )
+
+// appleHTTPClient has explicit timeouts to prevent hung connections to Apple APIs.
+var appleHTTPClient = &http.Client{Timeout: 20 * time.Second}
 
 const (
 	appleTokenURL  = "https://appleid.apple.com/auth/token"
@@ -97,7 +101,7 @@ func exchangeAppleCode(bundleID, clientSecret, authorizationCode string) (string
 		"grant_type":    {"authorization_code"},
 	}
 
-	resp, err := http.PostForm(appleTokenURL, data)
+	resp, err := appleHTTPClient.PostForm(appleTokenURL, data)
 	if err != nil {
 		return "", fmt.Errorf("token exchange request failed: %w", err)
 	}
@@ -108,28 +112,24 @@ func exchangeAppleCode(bundleID, clientSecret, authorizationCode string) (string
 		return "", fmt.Errorf("failed to read token exchange response body: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("token exchange returned %d: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("token exchange returned status %d", resp.StatusCode)
 	}
 
-	// Parse refresh_token from JSON response
-	// Simple extraction without full JSON parsing
-	bodyStr := string(body)
-	idx := strings.Index(bodyStr, `"refresh_token"`)
-	if idx == -1 {
-		return "", fmt.Errorf("no refresh_token in response: %s", bodyStr)
+	// Parse refresh_token from JSON response using proper unmarshaling.
+	var tokenResp struct {
+		RefreshToken string `json:"refresh_token"`
+		Error        string `json:"error"`
 	}
-
-	// Find the value after "refresh_token":"
-	rest := bodyStr[idx+len(`"refresh_token"`):]
-	// Skip possible whitespace and colon
-	rest = strings.TrimLeft(rest, " :")
-	rest = strings.TrimLeft(rest, `"`)
-	endIdx := strings.Index(rest, `"`)
-	if endIdx == -1 {
-		return "", fmt.Errorf("malformed refresh_token in response")
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return "", fmt.Errorf("failed to parse Apple token response")
 	}
-
-	return rest[:endIdx], nil
+	if tokenResp.Error != "" {
+		return "", fmt.Errorf("Apple token exchange error: %s", tokenResp.Error)
+	}
+	if tokenResp.RefreshToken == "" {
+		return "", fmt.Errorf("no refresh_token in Apple response")
+	}
+	return tokenResp.RefreshToken, nil
 }
 
 func revokeAppleToken(bundleID, clientSecret, refreshToken string) error {
@@ -140,15 +140,14 @@ func revokeAppleToken(bundleID, clientSecret, refreshToken string) error {
 		"token_type_hint": {"refresh_token"},
 	}
 
-	resp, err := http.PostForm(appleRevokeURL, data)
+	resp, err := appleHTTPClient.PostForm(appleRevokeURL, data)
 	if err != nil {
 		return fmt.Errorf("revoke request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("revoke returned %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("revoke returned status %d", resp.StatusCode)
 	}
 
 	return nil

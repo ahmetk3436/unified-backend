@@ -58,6 +58,12 @@ func validatePassword(password string) error {
 	if len(password) < 8 {
 		return errors.New("password must be at least 8 characters, contain at least one uppercase letter and one digit")
 	}
+	// bcrypt silently truncates passwords at 72 bytes (Okta-class vulnerability).
+	// Reject passwords that would be silently truncated so two different passwords
+	// cannot hash to the same bcrypt digest.
+	if len(password) > 72 {
+		return errors.New("password must not exceed 72 characters")
+	}
 	hasUpper := false
 	hasDigit := false
 	for _, ch := range password {
@@ -202,9 +208,21 @@ func (s *AuthService) DeleteAccount(appID string, userID uuid.UUID, password str
 		}
 	}
 
-	// Apple token revocation (Guideline 5.1.1) — fire-and-forget, don't block deletion
+	// Apple token revocation (Guideline 5.1.1) — fire-and-forget, don't block deletion.
+	// Wrapped with a 30s timeout to prevent goroutine leaks if Apple APIs are slow.
 	if user.AuthProvider == "apple" && authorizationCode != "" && bundleID != "" {
-		go RevokeAppleTokens(s.cfg, bundleID, authorizationCode)
+		go func(cfg *config.Config, bid, code string) {
+			done := make(chan struct{}, 1)
+			go func() {
+				RevokeAppleTokens(cfg, bid, code)
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(30 * time.Second):
+				slog.Warn("apple token revocation timed out")
+			}
+		}(s.cfg, bundleID, authorizationCode)
 	}
 
 	return s.db.Transaction(func(tx *gorm.DB) error {

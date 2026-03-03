@@ -66,7 +66,7 @@ func (h *ConfessionHandler) GetFeed(c *fiber.Ctx) error {
 
 	confessions, total, err := h.service.GetFeed(appID, page, limit)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": true, "message": err.Error()})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": true, "message": "Failed to fetch confessions"})
 	}
 
 	return c.JSON(fiber.Map{
@@ -97,7 +97,7 @@ func (h *ConfessionHandler) GetByCategory(c *fiber.Ctx) error {
 
 	confessions, total, err := h.service.GetByCategory(appID, category, page, limit)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": true, "message": err.Error()})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": true, "message": "Failed to fetch confessions"})
 	}
 
 	return c.JSON(fiber.Map{
@@ -126,7 +126,7 @@ func (h *ConfessionHandler) Like(c *fiber.Ctx) error {
 	}
 
 	if err := h.service.LikeConfession(appID, userID, confessionID); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": true, "message": err.Error()})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": true, "message": "Failed to like confession"})
 	}
 
 	return c.JSON(fiber.Map{"success": true})
@@ -169,7 +169,7 @@ func (h *ConfessionHandler) GetComments(c *fiber.Ctx) error {
 
 	comments, err := h.service.GetComments(appID, confessionID, page, limit)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": true, "message": err.Error()})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": true, "message": "Failed to fetch comments"})
 	}
 
 	return c.JSON(fiber.Map{
@@ -191,7 +191,7 @@ func (h *ConfessionHandler) Share(c *fiber.Ctx) error {
 	}
 
 	if err := h.service.IncrementShare(appID, confessionID); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": true, "message": err.Error()})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": true, "message": "Failed to update share count"})
 	}
 
 	return c.JSON(fiber.Map{"success": true})
@@ -206,7 +206,7 @@ func (h *ConfessionHandler) GetStats(c *fiber.Ctx) error {
 
 	stats, err := h.service.GetStats(appID, userID)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": true, "message": err.Error()})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": true, "message": "Failed to fetch stats"})
 	}
 
 	return c.JSON(stats)
@@ -221,7 +221,7 @@ func (h *ConfessionHandler) GetByID(c *fiber.Ctx) error {
 
 	confession, err := h.service.GetConfession(appID, confessionID)
 	if err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": true, "message": err.Error()})
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": true, "message": "Confession not found"})
 	}
 
 	return c.JSON(fiber.Map{"data": confession})
@@ -279,7 +279,7 @@ func (h *ConfessionHandler) GetReactions(c *fiber.Ctx) error {
 
 	reactions, err := h.service.GetReactions(appID, confessionID)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": true, "message": err.Error()})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": true, "message": "Failed to fetch reactions"})
 	}
 
 	return c.JSON(fiber.Map{"data": reactions})
@@ -297,7 +297,7 @@ func (h *ConfessionHandler) GetMyConfessions(c *fiber.Ctx) error {
 
 	confessions, total, err := h.service.GetMyConfessions(appID, userID, page, limit)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": true, "message": err.Error()})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": true, "message": "Failed to fetch confessions"})
 	}
 
 	return c.JSON(fiber.Map{

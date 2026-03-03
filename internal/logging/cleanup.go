@@ -11,6 +11,11 @@ import (
 // StartCleanup runs a daily goroutine that deletes system_logs older than 30 days.
 func StartCleanup(db *gorm.DB, done chan struct{}) {
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("panic in log cleanup goroutine", "recover", r)
+			}
+		}()
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
 		for {

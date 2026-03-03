@@ -59,7 +59,9 @@ func Load() *Config {
 		DBUser:     getEnv("DB_USER", "postgres"),
 		DBPassword: getEnv("DB_PASSWORD", ""),
 		DBName:     getEnv("DB_NAME", "unified_db"),
-		DBSSLMode:  getEnv("DB_SSLMODE", "disable"),
+		// "prefer" uses SSL when available without hard-failing internal Docker connections.
+		// Set DB_SSLMODE=require explicitly in prod for strict enforcement.
+		DBSSLMode: getEnv("DB_SSLMODE", "prefer"),
 
 		JWTSecret:        getEnv("JWT_SECRET", ""),
 		JWTAccessExpiry:  parseDuration(getEnv("JWT_ACCESS_EXPIRY", "15m")),

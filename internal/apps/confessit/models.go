@@ -52,7 +52,7 @@ type ConfessionComment struct {
 // ConfessionStreak tracks user's daily confession streak.
 type ConfessionStreak struct {
 	ID            uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
-	AppID         string    `gorm:"size:50;not null;index" json:"app_id"`
+	AppID         string    `gorm:"size:50;not null;uniqueIndex:idx_confessit_streak_app_user" json:"app_id"`
 	UserID        uuid.UUID `gorm:"type:uuid;uniqueIndex:idx_confessit_streak_app_user" json:"user_id"`
 	CurrentStreak int       `gorm:"default:0" json:"current_streak"`
 	LongestStreak int       `gorm:"default:0" json:"longest_streak"`

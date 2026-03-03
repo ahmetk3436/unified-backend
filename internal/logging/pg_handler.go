@@ -35,6 +35,11 @@ func NewPGHandler(db *gorm.DB) *PGHandler {
 }
 
 func (h *PGHandler) flushLoop() {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("panic in PGHandler flushLoop", "recover", r)
+		}
+	}()
 	for {
 		select {
 		case <-h.ticker.C:
