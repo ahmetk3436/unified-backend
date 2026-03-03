@@ -46,6 +46,14 @@ func main() {
 		slog.Error("DB_PASSWORD environment variable is required")
 		os.Exit(1)
 	}
+	if cfg.AdminToken == "" {
+		slog.Error("ADMIN_TOKEN environment variable is required")
+		os.Exit(1)
+	}
+	if len(cfg.AdminToken) < 32 {
+		slog.Error("ADMIN_TOKEN must be at least 32 characters to ensure sufficient entropy")
+		os.Exit(1)
+	}
 
 	// App registry
 	registry, err := tenant.LoadFromFile(cfg.AppsConfigPath)

@@ -49,6 +49,13 @@ func (s *SleepService) Create(appID string, userID uuid.UUID, req CreateSleepReq
 		return nil, fmt.Errorf("invalid wake_time format: %w", err)
 	}
 
+	if len(req.Phases) > 50 {
+		return nil, errors.New("too many phases: max 50")
+	}
+	if len(req.Sounds) > 500 {
+		return nil, errors.New("too many sounds: max 500")
+	}
+
 	phasesJSON, _ := json.Marshal(req.Phases)
 	soundsJSON, _ := json.Marshal(req.Sounds)
 
@@ -141,10 +148,16 @@ func (s *SleepService) Update(appID string, userID uuid.UUID, id uuid.UUID, req 
 		session.LatencyMinutes = *req.LatencyMinutes
 	}
 	if req.Phases != nil {
+		if len(*req.Phases) > 50 {
+			return nil, errors.New("too many phases: max 50")
+		}
 		j, _ := json.Marshal(*req.Phases)
 		session.PhasesJSON = string(j)
 	}
 	if req.Sounds != nil {
+		if len(*req.Sounds) > 500 {
+			return nil, errors.New("too many sounds: max 500")
+		}
 		j, _ := json.Marshal(*req.Sounds)
 		session.SoundsJSON = string(j)
 	}
@@ -483,7 +496,7 @@ func (s *SleepService) BatchImport(appID string, userID uuid.UUID, req BatchImpo
 
 		if err := s.db.Create(&session).Error; err != nil {
 			result.Status = "error"
-			result.Error = err.Error()
+			result.Error = "storage error"
 			resp.Skipped++
 			resp.Results = append(resp.Results, result)
 			continue

@@ -34,6 +34,9 @@ func (s *MoodService) Create(appID string, userID uuid.UUID, req CreateMoodReque
 	if req.Intensity < 1 || req.Intensity > 10 {
 		return nil, ErrInvalidIntensity
 	}
+	if len(req.Note) > 2000 {
+		return nil, errors.New("note exceeds 2000 characters")
+	}
 
 	triggersJSON, _ := json.Marshal(req.Triggers)
 	activitiesJSON, _ := json.Marshal(req.Activities)
@@ -159,6 +162,9 @@ func (s *MoodService) Update(appID string, userID uuid.UUID, id uuid.UUID, req U
 		entry.Intensity = *req.Intensity
 	}
 	if req.Note != nil {
+		if len(*req.Note) > 2000 {
+			return nil, errors.New("note exceeds 2000 characters")
+		}
 		entry.Note = *req.Note
 	}
 	if req.Triggers != nil {
@@ -708,6 +714,12 @@ func (s *VocabularyService) DeleteActivity(appID string, userID uuid.UUID, id uu
 // --- Bulk Sync ---
 
 func (s *VocabularyService) BulkSync(appID string, userID uuid.UUID, req BulkSyncVocabularyRequest) (*BulkSyncVocabularyResponse, error) {
+	// Limit total items to prevent storage abuse
+	total := len(req.Emotions) + len(req.Triggers) + len(req.Activities)
+	if total > 300 {
+		return nil, errors.New("bulk sync limit is 300 items total")
+	}
+
 	tx := s.db.Begin()
 	defer func() {
 		if r := recover(); r != nil {
@@ -715,7 +727,7 @@ func (s *VocabularyService) BulkSync(appID string, userID uuid.UUID, req BulkSyn
 		}
 	}()
 
-	// Upsert emotions
+	// Upsert emotions — check each sub-operation error and rollback on failure
 	for _, e := range req.Emotions {
 		if e.Name == "" || e.Emoji == "" || e.Color == "" {
 			continue
@@ -723,11 +735,17 @@ func (s *VocabularyService) BulkSync(appID string, userID uuid.UUID, req BulkSyn
 		var existing CustomEmotion
 		err := tx.Where("app_id = ? AND user_id = ? AND name = ?", appID, userID, e.Name).First(&existing).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			tx.Create(&CustomEmotion{AppID: appID, UserID: userID, Name: e.Name, Emoji: e.Emoji, Color: e.Color})
+			if err := tx.Create(&CustomEmotion{AppID: appID, UserID: userID, Name: e.Name, Emoji: e.Emoji, Color: e.Color}).Error; err != nil {
+				tx.Rollback()
+				return nil, fmt.Errorf("bulk sync failed: %w", err)
+			}
 		} else if err == nil {
 			existing.Emoji = e.Emoji
 			existing.Color = e.Color
-			tx.Save(&existing)
+			if err := tx.Save(&existing).Error; err != nil {
+				tx.Rollback()
+				return nil, fmt.Errorf("bulk sync failed: %w", err)
+			}
 		}
 	}
 
@@ -743,10 +761,16 @@ func (s *VocabularyService) BulkSync(appID string, userID uuid.UUID, req BulkSyn
 		var existing CustomTrigger
 		err := tx.Where("app_id = ? AND user_id = ? AND name = ?", appID, userID, t.Name).First(&existing).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			tx.Create(&CustomTrigger{AppID: appID, UserID: userID, Name: t.Name, Icon: icon})
+			if err := tx.Create(&CustomTrigger{AppID: appID, UserID: userID, Name: t.Name, Icon: icon}).Error; err != nil {
+				tx.Rollback()
+				return nil, fmt.Errorf("bulk sync failed: %w", err)
+			}
 		} else if err == nil {
 			existing.Icon = icon
-			tx.Save(&existing)
+			if err := tx.Save(&existing).Error; err != nil {
+				tx.Rollback()
+				return nil, fmt.Errorf("bulk sync failed: %w", err)
+			}
 		}
 	}
 
@@ -762,10 +786,16 @@ func (s *VocabularyService) BulkSync(appID string, userID uuid.UUID, req BulkSyn
 		var existing CustomActivity
 		err := tx.Where("app_id = ? AND user_id = ? AND name = ?", appID, userID, a.Name).First(&existing).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			tx.Create(&CustomActivity{AppID: appID, UserID: userID, Name: a.Name, Icon: icon})
+			if err := tx.Create(&CustomActivity{AppID: appID, UserID: userID, Name: a.Name, Icon: icon}).Error; err != nil {
+				tx.Rollback()
+				return nil, fmt.Errorf("bulk sync failed: %w", err)
+			}
 		} else if err == nil {
 			existing.Icon = icon
-			tx.Save(&existing)
+			if err := tx.Save(&existing).Error; err != nil {
+				tx.Rollback()
+				return nil, fmt.Errorf("bulk sync failed: %w", err)
+			}
 		}
 	}
 

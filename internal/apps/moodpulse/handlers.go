@@ -144,8 +144,8 @@ func (h *MoodHandler) BatchCreate(c *fiber.Ctx) error {
 	if len(req.Entries) == 0 {
 		return fiber.NewError(fiber.StatusBadRequest, "no entries provided")
 	}
-	if len(req.Entries) > 500 {
-		return fiber.NewError(fiber.StatusBadRequest, "max 500 entries per batch")
+	if len(req.Entries) > 100 {
+		return fiber.NewError(fiber.StatusBadRequest, "max 100 entries per batch")
 	}
 
 	resp, err := h.svc.BatchCreate(appID, userID, req)
