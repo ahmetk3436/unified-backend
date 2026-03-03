@@ -1,12 +1,18 @@
 package moodpulse
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
+	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/config"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/tenant"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -17,14 +23,330 @@ var (
 	ErrMissingEmotion   = errors.New("emotion is required")
 	ErrNotFound         = errors.New("mood entry not found")
 	ErrNotOwner         = errors.New("not the owner of this entry")
+	ErrInvalidPhotoURL  = errors.New("photo_url must be an https:// URL of at most 2048 characters")
+	ErrInvalidAudioURL  = errors.New("audio_url must be an https:// URL of at most 2048 characters")
 )
 
 type MoodService struct {
-	db *gorm.DB
+	db                *gorm.DB
+	emotionSenseMLURL string
+	aiAPIKey          string
+	aiAPIURL          string
+	openAIKey         string
+	openAIModel       string
+	aiTimeout         time.Duration
 }
 
-func NewMoodService(db *gorm.DB) *MoodService {
-	return &MoodService{db: db}
+func NewMoodService(db *gorm.DB, cfg *config.Config) *MoodService {
+	openAIModel := cfg.OpenAIModel
+	if openAIModel == "" {
+		openAIModel = "gpt-4o-mini"
+	}
+	aiTimeout := cfg.AITimeout
+	if aiTimeout == 0 {
+		aiTimeout = 60 * time.Second
+	}
+	return &MoodService{
+		db:                db,
+		emotionSenseMLURL: cfg.EmotionSenseMLURL,
+		aiAPIKey:          cfg.GLMAPIKey,
+		aiAPIURL:          cfg.GLMAPIURL,
+		openAIKey:         cfg.OpenAIAPIKey,
+		openAIModel:       openAIModel,
+		aiTimeout:         aiTimeout,
+	}
+}
+
+// isValidStorageURL accepts empty strings (field is optional) and requires an https://
+// scheme with a max length of 2048 characters. Guards against mixed-content and
+// excessively long URLs reaching the database.
+func isValidStorageURL(url string) bool {
+	if url == "" {
+		return true
+	}
+	if len(url) > 2048 {
+		return false
+	}
+	return strings.HasPrefix(url, "https://")
+}
+
+// --- OpenAI structs (shared within this package) ---
+
+type moodOpenAIChatRequest struct {
+	Model    string              `json:"model"`
+	Messages []moodOpenAIMessage `json:"messages"`
+}
+
+type moodOpenAIMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type moodOpenAIChatResponse struct {
+	Choices []struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	} `json:"choices"`
+}
+
+// callOpenAIDirect calls the OpenAI chat completions endpoint using s.openAIKey.
+// Returns an error if openAIKey is not configured.
+func (s *MoodService) callOpenAIDirect(systemPrompt, userPrompt string) (string, error) {
+	if s.openAIKey == "" {
+		return "", fmt.Errorf("openai api key not configured")
+	}
+
+	reqBody := moodOpenAIChatRequest{
+		Model: s.openAIModel,
+		Messages: []moodOpenAIMessage{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userPrompt},
+		},
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+s.openAIKey)
+
+	client := &http.Client{Timeout: s.aiTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("openai request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("openai returned status %d", resp.StatusCode)
+	}
+
+	var chatResp moodOpenAIChatResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&chatResp); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
+	if len(chatResp.Choices) == 0 {
+		return "", fmt.Errorf("no choices in response")
+	}
+
+	content := strings.TrimSpace(chatResp.Choices[0].Message.Content)
+	// Strip markdown code fences if present.
+	if strings.HasPrefix(content, "```") {
+		lines := strings.Split(content, "\n")
+		if len(lines) > 2 {
+			content = strings.Join(lines[1:len(lines)-1], "\n")
+		}
+	}
+
+	return content, nil
+}
+
+// analyzeEmotionAsync calls EmotionSenseML in a goroutine after entry creation or note update.
+// Updates the entry with detected_emotion, emotion_scores, and emotion_analyzed_at.
+// Never blocks the main request. All failures are silently logged and discarded.
+func (s *MoodService) analyzeEmotionAsync(appID, checkInID, content string) {
+	if s.emotionSenseMLURL == "" || len(content) < 10 {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		reqBody := map[string]string{"content": content}
+		bodyBytes, err := json.Marshal(reqBody)
+		if err != nil {
+			return
+		}
+		req, err := http.NewRequestWithContext(ctx, "POST",
+			s.emotionSenseMLURL+"/api/v1/analyze/text", bytes.NewReader(bodyBytes))
+		if err != nil {
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			slog.Warn("[moodpulse] analyzeEmotionAsync non-200", "status", resp.StatusCode)
+			return
+		}
+
+		var result struct {
+			DominantEmotion string `json:"dominantEmotion"`
+			Emotions        []struct {
+				Type  string  `json:"type"`
+				Score float64 `json:"score"`
+			} `json:"emotions"`
+		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return
+		}
+
+		if result.DominantEmotion == "" {
+			return
+		}
+
+		// Normalize known label typos from the voice model that may bleed into text responses.
+		emotionMap := map[string]string{
+			"suprised": "surprise",
+			"fearful":  "fear",
+		}
+		emotion := result.DominantEmotion
+		if normalized, ok := emotionMap[emotion]; ok {
+			emotion = normalized
+		}
+
+		scoresJSON, err := json.Marshal(result.Emotions)
+		if err != nil {
+			return
+		}
+		scoresStr := string(scoresJSON)
+		now := time.Now()
+
+		s.db.Model(&MoodCheckIn{}).
+			Where("id = ? AND app_id = ?", checkInID, appID).
+			Updates(map[string]interface{}{
+				"detected_emotion":    emotion,
+				"emotion_scores":      scoresStr,
+				"emotion_analyzed_at": now,
+			})
+	}()
+}
+
+// AIInsights fetches the user's last N days of mood entries and asks GPT-4o-mini
+// for longitudinal analysis. Returns the AI response as a plain string.
+func (s *MoodService) AIInsights(appID string, userID uuid.UUID, days int) (string, error) {
+	since := time.Now().UTC().AddDate(0, 0, -days)
+
+	var entries []MoodCheckIn
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ? AND created_at >= ?", userID, since).
+		Order("created_at ASC").
+		Limit(200).
+		Find(&entries).Error; err != nil {
+		return "", fmt.Errorf("fetch entries: %w", err)
+	}
+
+	if len(entries) == 0 {
+		return fmt.Sprintf("You have no mood entries in the last %d days. Start tracking to get personalized insights.", days), nil
+	}
+
+	const maxChars = 30_000
+	var sb strings.Builder
+	for _, e := range entries {
+		if sb.Len() >= maxChars {
+			break
+		}
+		var triggers []TagItem
+		_ = json.Unmarshal([]byte(e.TriggersJSON), &triggers)
+		var activities []TagItem
+		_ = json.Unmarshal([]byte(e.ActivitiesJSON), &activities)
+
+		triggerNames := make([]string, 0, len(triggers))
+		for _, t := range triggers {
+			triggerNames = append(triggerNames, t.Name)
+		}
+		activityNames := make([]string, 0, len(activities))
+		for _, a := range activities {
+			activityNames = append(activityNames, a.Name)
+		}
+
+		note := e.Note
+		if len(note) > 300 {
+			note = note[:300] + "..."
+		}
+
+		line := fmt.Sprintf("[%s] Emotion:%s Intensity:%d/10 Triggers:[%s] Activities:[%s] Note:%s\n",
+			e.CreatedAt.Format("2006-01-02"),
+			e.EmotionName,
+			e.Intensity,
+			strings.Join(triggerNames, ","),
+			strings.Join(activityNames, ","),
+			note,
+		)
+		if sb.Len()+len(line) > maxChars {
+			break
+		}
+		sb.WriteString(line)
+	}
+
+	systemPrompt := fmt.Sprintf(
+		"You are a professional mood coach. Analyze this user's mood entries from the last %d days. "+
+			"Identify patterns, recurring emotions, triggers, and activities. "+
+			"Give evidence-based recommendations. Be warm but factual. "+
+			"Focus on actionable insights the user can apply today.", days)
+
+	rawContent, err := s.callOpenAIDirect(systemPrompt, sb.String())
+	if err != nil {
+		return "", fmt.Errorf("ai insights: %w", err)
+	}
+
+	return rawContent, nil
+}
+
+// AskMood sends the last 90 days of mood entries to GPT-4o-mini with the user's question.
+// Returns the AI answer as a plain string.
+func (s *MoodService) AskMood(appID string, userID uuid.UUID, question string) (string, error) {
+	if len(question) == 0 {
+		return "", fmt.Errorf("question is required")
+	}
+	if len(question) > 500 {
+		question = question[:500]
+	}
+
+	since := time.Now().UTC().AddDate(0, 0, -90)
+	var entries []MoodCheckIn
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ? AND created_at >= ?", userID, since).
+		Order("created_at ASC").
+		Limit(200).
+		Find(&entries).Error; err != nil {
+		return "", fmt.Errorf("fetch entries: %w", err)
+	}
+
+	if len(entries) == 0 {
+		return "You have no mood entries in the last 90 days. Start tracking your mood to ask questions about it.", nil
+	}
+
+	const askMaxChars = 50_000
+	var sb strings.Builder
+	for _, e := range entries {
+		if sb.Len() >= askMaxChars {
+			break
+		}
+		note := e.Note
+		if len(note) > 400 {
+			note = note[:400] + "..."
+		}
+		line := fmt.Sprintf("[%s] Emotion:%s Intensity:%d/10 — %s\n",
+			e.CreatedAt.Format("2006-01-02"), e.EmotionName, e.Intensity, note)
+		if sb.Len()+len(line) > askMaxChars {
+			break
+		}
+		sb.WriteString(line)
+	}
+
+	systemPrompt := `You are an AI that has access to all of a user's mood tracking entries. Answer their question about their own mood data truthfully and concisely. Base your answer only on the mood entries provided.`
+	userPrompt := fmt.Sprintf("Mood entries (last 90 days):\n%s\n\nQuestion: %s", sb.String(), question)
+
+	rawContent, err := s.callOpenAIDirect(systemPrompt, userPrompt)
+	if err != nil {
+		return "", fmt.Errorf("ask mood: %w", err)
+	}
+
+	return rawContent, nil
 }
 
 func (s *MoodService) Create(appID string, userID uuid.UUID, req CreateMoodRequest) (*MoodEntryResponse, error) {
@@ -36,6 +358,16 @@ func (s *MoodService) Create(appID string, userID uuid.UUID, req CreateMoodReque
 	}
 	if len(req.Note) > 2000 {
 		return nil, errors.New("note exceeds 2000 characters")
+	}
+
+	if !isValidStorageURL(req.PhotoURL) {
+		return nil, ErrInvalidPhotoURL
+	}
+	if !isValidStorageURL(req.AudioURL) {
+		return nil, ErrInvalidAudioURL
+	}
+	if req.Transcript != nil && len(*req.Transcript) > 50000 {
+		return nil, errors.New("transcript too long (max 50000 characters)")
 	}
 
 	triggersJSON, _ := json.Marshal(req.Triggers)
@@ -53,6 +385,9 @@ func (s *MoodService) Create(appID string, userID uuid.UUID, req CreateMoodReque
 		Note:           req.Note,
 		TriggersJSON:   string(triggersJSON),
 		ActivitiesJSON: string(activitiesJSON),
+		PhotoURL:       req.PhotoURL,
+		AudioURL:       req.AudioURL,
+		Transcript:     req.Transcript,
 	}
 
 	if err := s.db.Create(&entry).Error; err != nil {
@@ -61,6 +396,9 @@ func (s *MoodService) Create(appID string, userID uuid.UUID, req CreateMoodReque
 
 	// Update streak
 	go s.updateStreak(appID, userID)
+
+	// Fire async emotion analysis if a note is present (non-blocking).
+	s.analyzeEmotionAsync(appID, entry.ID.String(), entry.Note)
 
 	return s.toResponse(entry), nil
 }
@@ -176,8 +514,32 @@ func (s *MoodService) Update(appID string, userID uuid.UUID, id uuid.UUID, req U
 		entry.ActivitiesJSON = string(j)
 	}
 
+	if req.PhotoURL != nil {
+		if !isValidStorageURL(*req.PhotoURL) {
+			return nil, ErrInvalidPhotoURL
+		}
+		entry.PhotoURL = *req.PhotoURL
+	}
+	if req.AudioURL != nil {
+		if !isValidStorageURL(*req.AudioURL) {
+			return nil, ErrInvalidAudioURL
+		}
+		entry.AudioURL = *req.AudioURL
+	}
+	if req.Transcript != nil {
+		if len(*req.Transcript) > 50000 {
+			return nil, errors.New("transcript too long (max 50000 characters)")
+		}
+		entry.Transcript = req.Transcript
+	}
+
 	if err := s.db.Save(&entry).Error; err != nil {
 		return nil, fmt.Errorf("update failed: %w", err)
+	}
+
+	// Fire async emotion analysis if note was updated (non-blocking).
+	if req.Note != nil && *req.Note != "" {
+		s.analyzeEmotionAsync(appID, entry.ID.String(), entry.Note)
 	}
 
 	return s.toResponse(entry), nil
@@ -527,6 +889,395 @@ func (s *MoodService) BatchDelete(appID string, userID uuid.UUID, req BatchDelet
 		Deleted: deleted,
 		Skipped: len(req.IDs) - deleted,
 	}, result.Error
+}
+
+// GetCBTExercise uses GPT-4o-mini to select a single evidence-based CBT/DBT technique
+// for a given emotion and intensity. Returns structured JSON as a map.
+func (s *MoodService) GetCBTExercise(emotion string, intensity int) (map[string]interface{}, error) {
+	if emotion == "" {
+		return nil, fmt.Errorf("emotion is required")
+	}
+	if intensity < 1 || intensity > 10 {
+		return nil, fmt.Errorf("intensity must be between 1 and 10")
+	}
+
+	systemPrompt := `You are a clinical psychologist specializing in CBT and DBT.
+Select the single best evidence-based technique for the user's current emotional state.
+Return ONLY valid JSON with no additional text or markdown.`
+
+	userPrompt := fmt.Sprintf(
+		`User just logged emotion: %s at intensity %d/10. `+
+			`Select the SINGLE best CBT or DBT technique for this moment. `+
+			`Return JSON with: {"technique": "5-4-3-2-1 Grounding", "duration_seconds": 180, `+
+			`"instruction": "Brief 2-sentence instruction", "steps": ["Step 1", "Step 2", "Step 3"], `+
+			`"science_note": "Brief one-line evidence note"}. Only return JSON, no other text.`,
+		emotion, intensity,
+	)
+
+	raw, err := s.callOpenAIDirect(systemPrompt, userPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("cbt exercise: %w", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return nil, fmt.Errorf("cbt exercise: invalid json from ai: %w", err)
+	}
+	return result, nil
+}
+
+// GetMoodDrivers analyzes the last N days of mood entries and returns correlations
+// by trigger, activity, time of day, and day of week. Pure Go math, no AI.
+func (s *MoodService) GetMoodDrivers(appID string, userID uuid.UUID, days int) (map[string]interface{}, error) {
+	since := time.Now().UTC().AddDate(0, 0, -days)
+
+	var entries []MoodCheckIn
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ? AND created_at >= ?", userID, since).
+		Order("created_at ASC").
+		Limit(1000).
+		Find(&entries).Error; err != nil {
+		return nil, fmt.Errorf("fetch entries: %w", err)
+	}
+
+	if len(entries) == 0 {
+		return map[string]interface{}{
+			"triggers":      []interface{}{},
+			"activities":    []interface{}{},
+			"time_of_day":   map[string]interface{}{},
+			"day_of_week":   map[string]interface{}{},
+			"top_positive":  []interface{}{},
+			"top_negative":  []interface{}{},
+			"total_entries": 0,
+			"days_analyzed": days,
+		}, nil
+	}
+
+	// Build trigger correlation: avg intensity with vs without each trigger
+	triggerWith := map[string]struct{ total float64; count int }{}
+	triggerWithout := map[string]struct{ total float64; count int }{}
+	allTriggerNames := map[string]bool{}
+
+	// Build activity correlation
+	activityWith := map[string]struct{ total float64; count int }{}
+	activityWithout := map[string]struct{ total float64; count int }{}
+	allActivityNames := map[string]bool{}
+
+	// Time of day
+	timeSlots := map[string]struct{ total float64; count int }{
+		"Morning": {}, "Afternoon": {}, "Evening": {}, "Night": {},
+	}
+
+	// Day of week
+	dowSlots := map[string]struct{ total float64; count int }{
+		"Sunday": {}, "Monday": {}, "Tuesday": {}, "Wednesday": {},
+		"Thursday": {}, "Friday": {}, "Saturday": {},
+	}
+
+	for _, e := range entries {
+		intensity := float64(e.Intensity)
+
+		var triggers []TagItem
+		var activities []TagItem
+		_ = json.Unmarshal([]byte(e.TriggersJSON), &triggers)
+		_ = json.Unmarshal([]byte(e.ActivitiesJSON), &activities)
+
+		triggerSet := map[string]bool{}
+		for _, t := range triggers {
+			allTriggerNames[t.Name] = true
+			triggerSet[t.Name] = true
+			ts := triggerWith[t.Name]
+			ts.total += intensity
+			ts.count++
+			triggerWith[t.Name] = ts
+		}
+
+		activitySet := map[string]bool{}
+		for _, a := range activities {
+			allActivityNames[a.Name] = true
+			activitySet[a.Name] = true
+			as := activityWith[a.Name]
+			as.total += intensity
+			as.count++
+			activityWith[a.Name] = as
+		}
+
+		// Without counts for triggers
+		for name := range allTriggerNames {
+			if !triggerSet[name] {
+				tw := triggerWithout[name]
+				tw.total += intensity
+				tw.count++
+				triggerWithout[name] = tw
+			}
+		}
+		// Without counts for activities
+		for name := range allActivityNames {
+			if !activitySet[name] {
+				aw := activityWithout[name]
+				aw.total += intensity
+				aw.count++
+				activityWithout[name] = aw
+			}
+		}
+
+		// Time of day
+		hour := e.CreatedAt.Hour()
+		var slot string
+		switch {
+		case hour < 12:
+			slot = "Morning"
+		case hour < 17:
+			slot = "Afternoon"
+		case hour < 21:
+			slot = "Evening"
+		default:
+			slot = "Night"
+		}
+		ts := timeSlots[slot]
+		ts.total += intensity
+		ts.count++
+		timeSlots[slot] = ts
+
+		// Day of week
+		dow := e.CreatedAt.Weekday().String()
+		ds := dowSlots[dow]
+		ds.total += intensity
+		ds.count++
+		dowSlots[dow] = ds
+	}
+
+	// Build trigger correlations
+	triggerCorrs := make([]DriverCorr, 0, len(allTriggerNames))
+	for name := range allTriggerNames {
+		withData := triggerWith[name]
+		withoutData := triggerWithout[name]
+		if withData.count < 2 {
+			continue // need at least 2 data points
+		}
+		avgWith := withData.total / float64(withData.count)
+		avgWithout := 5.0 // default if no without data
+		if withoutData.count > 0 {
+			avgWithout = withoutData.total / float64(withoutData.count)
+		}
+		diff := avgWith - avgWithout
+		// Round to 2 decimal places
+		triggerCorrs = append(triggerCorrs, DriverCorr{
+			Name:       name,
+			AvgWith:    math2dp(avgWith),
+			AvgWithout: math2dp(avgWithout),
+			Diff:       math2dp(diff),
+			CountWith:  withData.count,
+		})
+	}
+	sortDriverCorrs(triggerCorrs)
+
+	activityCorrs := make([]DriverCorr, 0, len(allActivityNames))
+	for name := range allActivityNames {
+		withData := activityWith[name]
+		withoutData := activityWithout[name]
+		if withData.count < 2 {
+			continue
+		}
+		avgWith := withData.total / float64(withData.count)
+		avgWithout := 5.0
+		if withoutData.count > 0 {
+			avgWithout = withoutData.total / float64(withoutData.count)
+		}
+		diff := avgWith - avgWithout
+		activityCorrs = append(activityCorrs, DriverCorr{
+			Name:       name,
+			AvgWith:    math2dp(avgWith),
+			AvgWithout: math2dp(avgWithout),
+			Diff:       math2dp(diff),
+			CountWith:  withData.count,
+		})
+	}
+	sortDriverCorrs(activityCorrs)
+
+	// Time of day averages
+	timeResult := map[string]float64{}
+	for slot, data := range timeSlots {
+		if data.count > 0 {
+			timeResult[slot] = math2dp(data.total / float64(data.count))
+		}
+	}
+
+	// Day of week averages
+	dowResult := map[string]float64{}
+	for day, data := range dowSlots {
+		if data.count > 0 {
+			dowResult[day] = math2dp(data.total / float64(data.count))
+		}
+	}
+
+	// Top positive and negative triggers (top 3 each)
+	topPositive := make([]DriverCorr, 0, 3)
+	topNegative := make([]DriverCorr, 0, 3)
+	for _, c := range triggerCorrs {
+		if c.Diff > 0 && len(topPositive) < 3 {
+			topPositive = append(topPositive, c)
+		}
+		if c.Diff < 0 && len(topNegative) < 3 {
+			topNegative = append(topNegative, c)
+		}
+	}
+
+	return map[string]interface{}{
+		"triggers":      triggerCorrs,
+		"activities":    activityCorrs,
+		"time_of_day":   timeResult,
+		"day_of_week":   dowResult,
+		"top_positive":  topPositive,
+		"top_negative":  topNegative,
+		"total_entries": len(entries),
+		"days_analyzed": 90,
+	}, nil
+}
+
+// math2dp rounds a float64 to 2 decimal places.
+func math2dp(v float64) float64 {
+	return float64(int(v*100+0.5)) / 100
+}
+
+// DriverCorr holds mood correlation data for a single trigger or activity.
+type DriverCorr struct {
+	Name       string  `json:"name"`
+	AvgWith    float64 `json:"avg_with"`
+	AvgWithout float64 `json:"avg_without"`
+	Diff       float64 `json:"diff"`
+	CountWith  int     `json:"count_with"`
+}
+
+// sortDriverCorrs sorts driver correlations by absolute diff descending.
+func sortDriverCorrs(corrs []DriverCorr) {
+	for i := 0; i < len(corrs); i++ {
+		for j := i + 1; j < len(corrs); j++ {
+			absi := corrs[i].Diff
+			if absi < 0 {
+				absi = -absi
+			}
+			absj := corrs[j].Diff
+			if absj < 0 {
+				absj = -absj
+			}
+			if absj > absi {
+				corrs[i], corrs[j] = corrs[j], corrs[i]
+			}
+		}
+	}
+}
+
+// GetMoodForecast pattern-matches the last 12 weeks of data (grouped by day of week and
+// time of day) and returns next 7 days of predicted moods based on historical averages.
+func (s *MoodService) GetMoodForecast(appID string, userID uuid.UUID) (map[string]interface{}, error) {
+	since := time.Now().UTC().AddDate(0, 0, -84) // 12 weeks
+
+	var entries []MoodCheckIn
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ? AND created_at >= ?", userID, since).
+		Order("created_at ASC").
+		Limit(1000).
+		Find(&entries).Error; err != nil {
+		return nil, fmt.Errorf("fetch entries: %w", err)
+	}
+
+	// Group by day of week: 0=Sunday, 1=Monday, ... 6=Saturday
+	dowStats := [7]struct {
+		total       float64
+		count       int
+		emotionVote map[string]int
+	}{}
+	for i := range dowStats {
+		dowStats[i].emotionVote = map[string]int{}
+	}
+
+	for _, e := range entries {
+		dow := int(e.CreatedAt.Weekday())
+		dowStats[dow].total += float64(e.Intensity)
+		dowStats[dow].count++
+		dowStats[dow].emotionVote[e.EmotionName]++
+	}
+
+	// Build confidence based on data count
+	confidenceLabel := func(count int) string {
+		switch {
+		case count >= 8:
+			return "high"
+		case count >= 4:
+			return "moderate"
+		case count >= 1:
+			return "low"
+		default:
+			return "none"
+		}
+	}
+
+	// Day name → note template
+	dayNotes := [7]string{
+		"You typically log on Sundays around this intensity.",
+		"Mondays tend to bring this mood pattern for you.",
+		"Tuesdays typically look like this for you.",
+		"You tend to feel this way on Wednesdays.",
+		"Thursdays usually look like this in your data.",
+		"Your Fridays tend toward this mood level.",
+		"Saturdays typically show this pattern for you.",
+	}
+
+	type ForecastDay struct {
+		Date               string  `json:"date"`
+		DayOfWeek          string  `json:"day_of_week"`
+		PredictedEmotion   string  `json:"predicted_emotion"`
+		PredictedIntensity float64 `json:"predicted_intensity"`
+		Confidence         string  `json:"confidence"`
+		Note               string  `json:"note"`
+	}
+
+	forecast := make([]ForecastDay, 7)
+	now := time.Now().UTC()
+	dayNames := []string{"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"}
+
+	for i := 0; i < 7; i++ {
+		target := now.AddDate(0, 0, i+1)
+		dow := int(target.Weekday())
+		stats := dowStats[dow]
+
+		day := ForecastDay{
+			Date:      target.Format("2006-01-02"),
+			DayOfWeek: dayNames[dow],
+		}
+
+		if stats.count == 0 {
+			day.PredictedEmotion = "unknown"
+			day.PredictedIntensity = 5.0
+			day.Confidence = "none"
+			day.Note = "Not enough data for this day yet."
+		} else {
+			avgIntensity := math2dp(stats.total / float64(stats.count))
+			day.PredictedIntensity = avgIntensity
+			day.Confidence = confidenceLabel(stats.count)
+
+			// Top emotion vote
+			topEmotion := "calm"
+			topCount := 0
+			for emotion, cnt := range stats.emotionVote {
+				if cnt > topCount {
+					topCount = cnt
+					topEmotion = emotion
+				}
+			}
+			day.PredictedEmotion = topEmotion
+			day.Note = dayNotes[dow]
+		}
+
+		forecast[i] = day
+	}
+
+	return map[string]interface{}{
+		"forecast":      forecast,
+		"weeks_analyzed": 12,
+		"total_entries": len(entries),
+	}, nil
 }
 
 func (s *MoodService) toResponse(e MoodCheckIn) *MoodEntryResponse {

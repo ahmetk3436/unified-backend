@@ -1,19 +1,22 @@
 package moodpulse
 
 import (
+	"log/slog"
 	"strconv"
 
+	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/dto"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/tenant"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 )
 
 type MoodHandler struct {
-	svc *MoodService
+	svc            *MoodService
+	uploadHandler  *UploadHandler
 }
 
-func NewMoodHandler(svc *MoodService) *MoodHandler {
-	return &MoodHandler{svc: svc}
+func NewMoodHandler(svc *MoodService, uploadHandler *UploadHandler) *MoodHandler {
+	return &MoodHandler{svc: svc, uploadHandler: uploadHandler}
 }
 
 func (h *MoodHandler) Create(c *fiber.Ctx) error {
@@ -423,4 +426,177 @@ func (h *VocabularyHandler) BulkSync(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
 	return c.JSON(resp)
+}
+
+// AIInsights handles GET /moods/ai-insights?days=30
+// Returns longitudinal mood analysis from GPT-4o-mini. Pro-gated via JWT auth.
+func (h *MoodHandler) AIInsights(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	days, _ := strconv.Atoi(c.Query("days", "30"))
+	if days < 1 {
+		days = 1
+	}
+	if days > 90 {
+		days = 90
+	}
+
+	insights, err := h.svc.AIInsights(appID, userID, days)
+	if err != nil {
+		slog.Error("[moodpulse] ai insights failed", "app", appID, "user", userID, "error", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "AI insights unavailable",
+		})
+	}
+
+	return c.JSON(AIInsightsResponse{Insights: insights})
+}
+
+// Ask handles POST /moods/ask with body {"question": "..."}
+// Answers a natural-language question about the user's mood history. Pro-gated via JWT auth.
+func (h *MoodHandler) Ask(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	var req AskMoodRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
+			Error: true, Message: "Invalid request body",
+		})
+	}
+
+	if len(req.Question) == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
+			Error: true, Message: "question is required",
+		})
+	}
+	if len(req.Question) > 500 {
+		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
+			Error: true, Message: "question must be at most 500 characters",
+		})
+	}
+
+	answer, err := h.svc.AskMood(appID, userID, req.Question)
+	if err != nil {
+		slog.Error("[moodpulse] ask mood failed", "app", appID, "user", userID, "error", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "Failed to answer question",
+		})
+	}
+
+	return c.JSON(AskMoodResponse{Answer: answer})
+}
+
+// UploadPhoto delegates to the UploadHandler (POST /moods/upload-photo).
+func (h *MoodHandler) UploadPhoto(c *fiber.Ctx) error {
+	return h.uploadHandler.UploadPhoto(c)
+}
+
+// Transcribe delegates to the UploadHandler (POST /moods/transcribe).
+func (h *MoodHandler) Transcribe(c *fiber.Ctx) error {
+	return h.uploadHandler.Transcribe(c)
+}
+
+// GetCBTExercise handles POST /moods/cbt
+// Accepts {"emotion": "Anxiety", "intensity": 8} and returns a tailored CBT exercise.
+func (h *MoodHandler) GetCBTExercise(c *fiber.Ctx) error {
+	_, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	var body struct {
+		Emotion   string `json:"emotion"`
+		Intensity int    `json:"intensity"`
+	}
+	if err := c.BodyParser(&body); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
+			Error: true, Message: "Invalid request body",
+		})
+	}
+	if body.Emotion == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
+			Error: true, Message: "emotion is required",
+		})
+	}
+	if body.Intensity < 1 || body.Intensity > 10 {
+		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
+			Error: true, Message: "intensity must be between 1 and 10",
+		})
+	}
+
+	result, err := h.svc.GetCBTExercise(body.Emotion, body.Intensity)
+	if err != nil {
+		slog.Error("[moodpulse] cbt exercise failed", "error", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "CBT exercise unavailable",
+		})
+	}
+
+	return c.JSON(result)
+}
+
+// GetMoodDrivers handles GET /moods/drivers?days=90
+// Returns trigger and activity correlations with mood intensity over the given period.
+func (h *MoodHandler) GetMoodDrivers(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	days, _ := strconv.Atoi(c.Query("days", "90"))
+	if days < 1 {
+		days = 1
+	}
+	if days > 90 {
+		days = 90
+	}
+
+	drivers, err := h.svc.GetMoodDrivers(appID, userID, days)
+	if err != nil {
+		slog.Error("[moodpulse] mood drivers failed", "app", appID, "user", userID, "error", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "Mood drivers unavailable",
+		})
+	}
+
+	return c.JSON(drivers)
+}
+
+// GetMoodForecast handles GET /moods/forecast
+// Returns a simple mood forecast for the next 3 days based on historical patterns.
+func (h *MoodHandler) GetMoodForecast(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	forecast, err := h.svc.GetMoodForecast(appID, userID)
+	if err != nil {
+		slog.Error("[moodpulse] mood forecast failed", "app", appID, "user", userID, "error", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "Mood forecast unavailable",
+		})
+	}
+
+	return c.JSON(forecast)
 }

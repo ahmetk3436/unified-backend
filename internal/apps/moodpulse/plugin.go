@@ -1,8 +1,11 @@
 package moodpulse
 
 import (
+	"time"
+
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/config"
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"gorm.io/gorm"
 )
 
@@ -25,9 +28,72 @@ func (p *MoodPulsePlugin) Models() []interface{} {
 }
 
 func (p *MoodPulsePlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *config.Config) {
-	svc := NewMoodService(db)
-	handler := NewMoodHandler(svc)
+	svc := NewMoodService(db, cfg)
+	uploadHandler := NewUploadHandler(cfg.OpenAIAPIKey, cfg.AITimeout, cfg.UploadsRoot)
+	handler := NewMoodHandler(svc, uploadHandler)
 
+	// Per-user rate limiter for AI-backed endpoints.
+	// Keyed on JWT token prefix so each authenticated user has their own bucket.
+	aiLimiter := limiter.New(limiter.Config{
+		Max:               10,
+		Expiration:        1 * time.Hour,
+		LimiterMiddleware: limiter.SlidingWindow{},
+		KeyGenerator: func(c *fiber.Ctx) string {
+			auth := c.Get("Authorization")
+			if len(auth) > 39 { // "Bearer " (7) + 32 chars minimum
+				return "mood_ai:" + auth[7:39]
+			}
+			return "mood_ai:ip:" + c.IP()
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+				"error":   true,
+				"message": "AI rate limit exceeded. Please try again in an hour.",
+			})
+		},
+	})
+
+	// Per-user rate limiters for upload endpoints.
+	// Photo: 20 uploads/hour — prevents disk exhaustion from a single authenticated user.
+	// Transcribe: 10/hour — each call proxies to paid Whisper API (cost control + disk).
+	uploadPhotoLimiter := limiter.New(limiter.Config{
+		Max:               20,
+		Expiration:        1 * time.Hour,
+		LimiterMiddleware: limiter.SlidingWindow{},
+		KeyGenerator: func(c *fiber.Ctx) string {
+			auth := c.Get("Authorization")
+			if len(auth) > 39 {
+				return "mood_upload_photo:" + auth[7:39]
+			}
+			return "mood_upload_photo:ip:" + c.IP()
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+				"error":   true,
+				"message": "Upload rate limit exceeded. Please try again in an hour.",
+			})
+		},
+	})
+	transcribeLimiter := limiter.New(limiter.Config{
+		Max:               10,
+		Expiration:        1 * time.Hour,
+		LimiterMiddleware: limiter.SlidingWindow{},
+		KeyGenerator: func(c *fiber.Ctx) string {
+			auth := c.Get("Authorization")
+			if len(auth) > 39 {
+				return "mood_transcribe:" + auth[7:39]
+			}
+			return "mood_transcribe:ip:" + c.IP()
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+				"error":   true,
+				"message": "Transcription rate limit exceeded. Please try again in an hour.",
+			})
+		},
+	})
+
+	// Core mood CRUD routes
 	router.Post("/moods", handler.Create)
 	router.Get("/moods", handler.List)
 	router.Get("/moods/search", handler.Search)
@@ -36,6 +102,19 @@ func (p *MoodPulsePlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *
 	router.Get("/moods/stats", handler.GetStats)
 	router.Post("/moods/batch", handler.BatchCreate)
 	router.Post("/moods/batch-delete", handler.BatchDelete)
+
+	// AI routes (MUST come before :id catch-all)
+	router.Get("/moods/ai-insights", aiLimiter, handler.AIInsights)
+	router.Post("/moods/ask", aiLimiter, handler.Ask)
+
+	// Upload routes — photo storage and audio transcription (MUST come before :id catch-all).
+	router.Post("/moods/upload-photo", uploadPhotoLimiter, handler.UploadPhoto)
+	router.Post("/moods/transcribe", transcribeLimiter, handler.Transcribe)
+
+	// Feature endpoints — CBT exercises, mood drivers, mood forecast
+	router.Post("/moods/cbt", aiLimiter, handler.GetCBTExercise)
+	router.Get("/moods/drivers", handler.GetMoodDrivers)
+	router.Get("/moods/forecast", handler.GetMoodForecast)
 
 	// Parameterized routes last
 	router.Get("/moods/:id", handler.Get)

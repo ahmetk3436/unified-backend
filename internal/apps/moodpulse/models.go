@@ -9,21 +9,27 @@ import (
 
 // MoodCheckIn is the core mood entry.
 type MoodCheckIn struct {
-	ID             uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
-	AppID          string         `gorm:"size:50;not null;index" json:"app_id"`
-	UserID         uuid.UUID      `gorm:"type:uuid;index" json:"user_id"`
-	EmotionID      string         `gorm:"size:50;not null" json:"emotion_id"`
-	EmotionName    string         `gorm:"size:100;not null" json:"emotion_name"`
-	EmotionEmoji   string         `gorm:"type:varchar(10)" json:"emotion_emoji"`
-	EmotionColor   string         `gorm:"type:varchar(10)" json:"emotion_color"`
-	EmotionCustom  bool           `gorm:"default:false" json:"emotion_custom"`
-	Intensity      int            `gorm:"default:5;not null" json:"intensity"`
-	Note           string         `gorm:"type:text" json:"note"`
-	TriggersJSON   string         `gorm:"type:jsonb;default:'[]'" json:"-"`
-	ActivitiesJSON string         `gorm:"type:jsonb;default:'[]'" json:"-"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at"`
-	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
+	ID                uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	AppID             string         `gorm:"size:50;not null;index" json:"app_id"`
+	UserID            uuid.UUID      `gorm:"type:uuid;index" json:"user_id"`
+	EmotionID         string         `gorm:"size:50;not null" json:"emotion_id"`
+	EmotionName       string         `gorm:"size:100;not null" json:"emotion_name"`
+	EmotionEmoji      string         `gorm:"type:varchar(10)" json:"emotion_emoji"`
+	EmotionColor      string         `gorm:"type:varchar(10)" json:"emotion_color"`
+	EmotionCustom     bool           `gorm:"default:false" json:"emotion_custom"`
+	Intensity         int            `gorm:"default:5;not null" json:"intensity"`
+	Note              string         `gorm:"type:text" json:"note"`
+	TriggersJSON      string         `gorm:"type:jsonb;default:'[]'" json:"-"`
+	ActivitiesJSON    string         `gorm:"type:jsonb;default:'[]'" json:"-"`
+	PhotoURL          string         `json:"photo_url" gorm:"type:text"`
+	AudioURL          string         `json:"audio_url" gorm:"type:text"`
+	Transcript        *string        `json:"transcript" gorm:"type:text"`
+	DetectedEmotion   string         `json:"detected_emotion" gorm:"type:varchar(50)"`
+	EmotionScores     *string        `json:"emotion_scores" gorm:"type:text"` // JSON array
+	EmotionAnalyzedAt *time.Time     `json:"emotion_analyzed_at"`
+	CreatedAt         time.Time      `json:"created_at"`
+	UpdatedAt         time.Time      `json:"updated_at"`
+	DeletedAt         gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // MoodStreak tracks consecutive days of logging.
@@ -62,6 +68,9 @@ type CreateMoodRequest struct {
 	Note       string     `json:"note"`
 	Triggers   []TagItem  `json:"triggers"`
 	Activities []TagItem  `json:"activities"`
+	PhotoURL   string     `json:"photo_url"`
+	AudioURL   string     `json:"audio_url"`
+	Transcript *string    `json:"transcript"`
 }
 
 type UpdateMoodRequest struct {
@@ -70,6 +79,21 @@ type UpdateMoodRequest struct {
 	Note       *string     `json:"note"`
 	Triggers   *[]TagItem  `json:"triggers"`
 	Activities *[]TagItem  `json:"activities"`
+	PhotoURL   *string     `json:"photo_url"`
+	AudioURL   *string     `json:"audio_url"`
+	Transcript *string     `json:"transcript"`
+}
+
+type AIInsightsResponse struct {
+	Insights string `json:"insights"`
+}
+
+type AskMoodRequest struct {
+	Question string `json:"question"`
+}
+
+type AskMoodResponse struct {
+	Answer string `json:"answer"`
 }
 
 type MoodEntryResponse struct {
