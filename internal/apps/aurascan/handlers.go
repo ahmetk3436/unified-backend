@@ -157,6 +157,12 @@ func (h *AuraHandler) List(c *fiber.Ctx) error {
 
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	pageSize, _ := strconv.Atoi(c.Query("page_size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize <= 0 || pageSize > 100 {
+		pageSize = 20
+	}
 
 	readings, total, err := h.auraService.List(appID, userID, page, pageSize)
 	if err != nil {

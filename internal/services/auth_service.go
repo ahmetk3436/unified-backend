@@ -225,6 +225,11 @@ func (s *AuthService) DeleteAccount(appID string, userID uuid.UUID, password str
 	// Wrapped with a 30s timeout to prevent goroutine leaks if Apple APIs are slow.
 	if user.AuthProvider == "apple" && authorizationCode != "" && bundleID != "" {
 		go func(cfg *config.Config, bid, code string) {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("panic in apple token revocation goroutine", "recover", r)
+				}
+			}()
 			done := make(chan struct{}, 1)
 			go func() {
 				RevokeAppleTokens(cfg, bid, code)

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/big"
 	"net/http"
 	"strings"
@@ -94,7 +95,9 @@ func (c *AppleJWKSClient) fetchKeys() error {
 	}
 
 	var jwks AppleJWKS
-	if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
+	// Limit response body to 1 MiB — prevents OOM if Apple's JWKS endpoint is
+	// compromised or returns an unexpectedly large payload.
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&jwks); err != nil {
 		return fmt.Errorf("failed to decode JWKS: %w", err)
 	}
 

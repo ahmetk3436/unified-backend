@@ -13,7 +13,9 @@ func CORS(cfg *config.Config) fiber.Handler {
 	// Mobile SDK clients do not send an Origin header and are unaffected.
 	// Note: "null" is not a valid Fiber origin format — use .invalid TLD (RFC 2606).
 	origins := cfg.CORSOrigins
-	if origins == "" {
+	if origins == "" || origins == "*" {
+		// Wildcard is never valid here — this is a mobile-only API.
+		// If someone sets CORS_ORIGINS=* in Coolify by mistake, lock it down.
 		origins = "https://no-origin.invalid"
 	}
 	return cors.New(cors.Config{

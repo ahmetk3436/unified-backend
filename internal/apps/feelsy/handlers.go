@@ -83,8 +83,14 @@ func (h *FeelHandler) GetFeelHistory(c *fiber.Ctx) error {
 
 	limit, _ := strconv.Atoi(c.Query("limit", "20"))
 	offset, _ := strconv.Atoi(c.Query("offset", "0"))
-	if limit > 100 {
-		limit = 100
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > 10000 {
+		offset = 0
 	}
 
 	checks, total, err := h.service.GetFeelHistory(appID, userID, limit, offset)

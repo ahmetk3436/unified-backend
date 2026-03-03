@@ -103,6 +103,9 @@ func (c *Config) DSN() string {
 		" dbname=" + c.DBName +
 		" port=" + c.DBPort +
 		" sslmode=" + c.DBSSLMode +
+		// statement_timeout=30s: prevents runaway ILIKE full-table-scans
+		// (e.g. /search with large OFFSET) from holding DB connections open.
+		" options=-c statement_timeout=30000" +
 		" TimeZone=UTC"
 }
 

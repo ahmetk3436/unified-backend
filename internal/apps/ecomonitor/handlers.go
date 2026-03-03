@@ -59,6 +59,12 @@ func (h *CoordinateHandler) ListCoordinates(c *fiber.Ctx) error {
 
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit, _ := strconv.Atoi(c.Query("limit", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
 	search := c.Query("search", "")
 
 	coords, err := h.coordService.List(appID, userID, page, limit, search)
@@ -194,6 +200,12 @@ func (h *SatelliteHandler) GetAnalysis(c *fiber.Ctx) error {
 
 	page, _ := strconv.Atoi(c.Query("page", "1"))
 	limit, _ := strconv.Atoi(c.Query("limit", "10"))
+	if page < 1 {
+		page = 1
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 10
+	}
 
 	results, err := h.satelliteService.GetAnalysis(appID, coordinateID, page, limit)
 	if err != nil {
@@ -211,6 +223,9 @@ func (h *SatelliteHandler) GetAlerts(c *fiber.Ctx) error {
 	}
 
 	limit, _ := strconv.Atoi(c.Query("limit", "10"))
+	if limit <= 0 || limit > 100 {
+		limit = 10
+	}
 	severity := c.Query("severity")
 
 	alerts, err := h.satelliteService.GetAlerts(appID, userID, limit, severity)

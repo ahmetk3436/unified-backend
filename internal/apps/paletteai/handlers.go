@@ -84,8 +84,14 @@ func (h *PaletteHandler) ListPalettes(c *fiber.Ctx) error {
 
 	limit, _ := strconv.Atoi(c.Query("limit", "20"))
 	offset, _ := strconv.Atoi(c.Query("offset", "0"))
-	if limit > 100 {
-		limit = 100
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > 10000 {
+		offset = 0
 	}
 
 	palettes, total, err := h.paletteService.GetUserPalettes(appID, userID, limit, offset)
@@ -266,6 +272,15 @@ func (h *PaletteHandler) ListFavorites(c *fiber.Ctx) error {
 
 	limit, _ := strconv.Atoi(c.Query("limit", "20"))
 	offset, _ := strconv.Atoi(c.Query("offset", "0"))
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > 10000 {
+		offset = 0
+	}
 
 	palettes, total, err := h.paletteService.GetFavorites(appID, userID, limit, offset)
 	if err != nil {
