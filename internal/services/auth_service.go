@@ -272,28 +272,44 @@ func (s *AuthService) AppleSignIn(appID string, bundleID string, req *dto.AppleS
 	}
 
 	appleUserID := claims.Sub
-	email := strings.ToLower(strings.TrimSpace(claims.Email))
-	if email == "" {
-		email = strings.ToLower(strings.TrimSpace(req.Email))
+
+	// tokenEmail is the email from the cryptographically-verified Apple JWT.
+	// It is only present on the FIRST sign-in; subsequent sign-ins return empty.
+	tokenEmail := strings.ToLower(strings.TrimSpace(claims.Email))
+
+	// accountEmail is used solely for new-account creation, never for DB lookups.
+	// req.Email is client-supplied and MUST NOT be used to find existing accounts —
+	// doing so allows an attacker to merge their Apple ID into a victim's account
+	// by passing the victim's email when their own token email is empty.
+	accountEmail := tokenEmail
+	if accountEmail == "" {
+		accountEmail = strings.ToLower(strings.TrimSpace(req.Email))
 	}
-	if email == "" {
-		email = appleUserID + "@privaterelay.appleid.com"
+	if accountEmail == "" {
+		accountEmail = appleUserID + "@privaterelay.appleid.com"
 	}
 
 	var user models.User
-	err = s.db.Scopes(tenant.ForTenant(appID)).
-		Where("apple_user_id = ? OR email = ?", appleUserID, email).First(&user).Error
+	var lookupErr error
+	if tokenEmail != "" {
+		// Email is token-verified — safe to match by email (handles the case where
+		// a user first registered via email/password, then signs in with Apple using
+		// the same address on their first Apple sign-in).
+		lookupErr = s.db.Scopes(tenant.ForTenant(appID)).
+			Where("apple_user_id = ? OR email = ?", appleUserID, tokenEmail).First(&user).Error
+	} else {
+		// No email in the token — match ONLY by apple_user_id.
+		// Never use req.Email here: an attacker could set it to any address to
+		// hijack an existing account.
+		lookupErr = s.db.Scopes(tenant.ForTenant(appID)).
+			Where("apple_user_id = ?", appleUserID).First(&user).Error
+	}
 
-	if err != nil {
-		displayName := req.FullName
-		if displayName == "" {
-			displayName = strings.Split(email, "@")[0]
-		}
-
+	if lookupErr != nil {
 		user = models.User{
 			ID:           uuid.New(),
 			AppID:        appID,
-			Email:        email,
+			Email:        accountEmail,
 			Password:     "",
 			AppleUserID:  &appleUserID,
 			AuthProvider: "apple",
