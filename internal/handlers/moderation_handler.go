@@ -103,11 +103,13 @@ func (h *ModerationHandler) UnblockUser(c *fiber.Ctx) error {
 func (h *ModerationHandler) ListReports(c *fiber.Ctx) error {
 	appID := tenant.GetAppID(c)
 	status := c.Query("status", "")
-	limit, _ := strconv.Atoi(c.Query("limit", "20"))
-	offset, _ := strconv.Atoi(c.Query("offset", "0"))
-
-	if limit > 100 {
-		limit = 100
+	limit, err := strconv.Atoi(c.Query("limit", "20"))
+	if err != nil || limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	offset, err2 := strconv.Atoi(c.Query("offset", "0"))
+	if err2 != nil || offset < 0 {
+		offset = 0
 	}
 
 	reports, total, err := h.moderationService.ListReports(appID, status, limit, offset)

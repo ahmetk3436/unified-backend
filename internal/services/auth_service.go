@@ -108,6 +108,7 @@ func (s *AuthService) Register(appID string, req *dto.RegisterRequest) (*dto.Aut
 func (s *AuthService) Login(appID string, req *dto.LoginRequest) (*dto.AuthResponse, error) {
 	var user models.User
 	if err := s.db.Scopes(tenant.ForTenant(appID)).Where("email = ?", req.Email).First(&user).Error; err != nil {
+		slog.Warn("login failed", "email", req.Email, "app_id", appID)
 		return nil, ErrInvalidCredentials
 	}
 
@@ -131,20 +132,27 @@ func (s *AuthService) Refresh(appID string, req *dto.RefreshRequest) (*dto.AuthR
 	if stored.Revoked {
 		slog.Warn("refresh token reuse detected, revoking all tokens for user",
 			"user_id", stored.UserID, "app_id", appID)
-		s.db.Model(&models.RefreshToken{}).
+		if err := s.db.Model(&models.RefreshToken{}).
 			Scopes(tenant.ForTenant(appID)).
 			Where("user_id = ? AND revoked = false", stored.UserID).
-			Update("revoked", true)
+			Update("revoked", true).Error; err != nil {
+			slog.Error("failed to revoke all tokens after reuse detection", "user_id", stored.UserID, "error", err)
+		}
 		return nil, ErrInvalidToken
 	}
 
 	if time.Now().After(stored.ExpiresAt) {
-		s.db.Model(&stored).Update("revoked", true)
+		if err := s.db.Model(&stored).Update("revoked", true).Error; err != nil {
+			slog.Error("failed to revoke expired refresh token", "token_id", stored.ID, "error", err)
+		}
 		return nil, ErrInvalidToken
 	}
 
 	// Revoke the current token (rotation)
-	s.db.Model(&stored).Update("revoked", true)
+	if err := s.db.Model(&stored).Update("revoked", true).Error; err != nil {
+		slog.Error("failed to revoke refresh token during rotation", "token_id", stored.ID, "error", err)
+		return nil, fmt.Errorf("failed to rotate refresh token: %w", err)
+	}
 
 	var user models.User
 	if err := s.db.Scopes(tenant.ForTenant(appID)).First(&user, "id = ?", stored.UserID).Error; err != nil {
@@ -247,6 +255,7 @@ func (s *AuthService) AppleSignIn(appID string, bundleID string, req *dto.AppleS
 				"auth_provider": "apple",
 			}).Error; err != nil {
 				slog.Error("failed to update user with Apple ID", "error", err, "user_id", user.ID, "app_id", appID)
+				return nil, fmt.Errorf("failed to update user with Apple ID: %w", err)
 			}
 			user.AppleUserID = &appleUserID
 			user.AuthProvider = "apple"

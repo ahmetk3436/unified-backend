@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"log/slog"
 	"strings"
 
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/dto"
@@ -101,6 +102,7 @@ func (h *AuthHandler) Logout(c *fiber.Ctx) error {
 	}
 
 	if err := h.authService.Logout(appID, &req); err != nil {
+		slog.Error("logout failed", "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
 			Error: true, Message: "Failed to logout",
 		})

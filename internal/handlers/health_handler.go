@@ -21,7 +21,7 @@ func NewHealthHandler(registry *tenant.Registry) *HealthHandler {
 func (h *HealthHandler) Check(c *fiber.Ctx) error {
 	dbStatus := "ok"
 	if err := database.Ping(); err != nil {
-		slog.Error("database ping failed", "err", err)
+		slog.Error("database ping failed", "error", err)
 		dbStatus = "unhealthy"
 	}
 

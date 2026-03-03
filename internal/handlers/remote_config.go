@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -57,6 +58,7 @@ func (h *RemoteConfigHandler) GetConfig(c *fiber.Ctx) error {
 			if err := json.Unmarshal([]byte(cfg.Value), &parsed); err == nil {
 				result[cfg.Key] = parsed
 			} else {
+				slog.Warn("remote config value is not valid JSON, using raw string", "key", cfg.Key, "error", err)
 				result[cfg.Key] = cfg.Value
 			}
 		default:
@@ -255,7 +257,9 @@ func (h *RemoteConfigHandler) SeedDefaults(appRegistry map[string]string) {
 		for _, def := range defaults {
 			var existing models.RemoteConfig
 			if h.db.Where("app_id = ? AND key = ?", def.AppID, def.Key).First(&existing).Error != nil {
-				h.db.Create(&def)
+				if err := h.db.Create(&def).Error; err != nil {
+					slog.Error("failed to seed config", "key", def.Key, "error", err)
+				}
 			}
 		}
 	}

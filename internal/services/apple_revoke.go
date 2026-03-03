@@ -24,6 +24,12 @@ const (
 // This is required by Apple Guideline 5.1.1 when deleting user accounts.
 // If credentials are not configured, this is a no-op (logs a warning).
 func RevokeAppleTokens(cfg *config.Config, bundleID, authorizationCode string) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("apple revocation goroutine panicked", "panic", r)
+		}
+	}()
+
 	if cfg.AppleTeamID == "" || cfg.AppleKeyID == "" || cfg.ApplePrivateKey == "" {
 		slog.Warn("apple token revocation skipped: credentials not configured")
 		return
@@ -97,7 +103,10 @@ func exchangeAppleCode(bundleID, clientSecret, authorizationCode string) (string
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read token exchange response body: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("token exchange returned %d: %s", resp.StatusCode, string(body))
 	}
