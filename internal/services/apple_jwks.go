@@ -74,6 +74,15 @@ func NewAppleJWKSClient() *AppleJWKSClient {
 }
 
 func (c *AppleJWKSClient) fetchKeys() error {
+	c.cache.mu.Lock()
+	defer c.cache.mu.Unlock()
+
+	// Double-check under write lock: another goroutine may have already refreshed
+	// the cache while this goroutine was waiting for the lock (thundering-herd guard).
+	if time.Now().Before(c.cache.expiresAt) {
+		return nil
+	}
+
 	resp, err := c.httpClient.Get(c.jwksURL)
 	if err != nil {
 		return fmt.Errorf("failed to fetch JWKS: %w", err)
@@ -89,18 +98,21 @@ func (c *AppleJWKSClient) fetchKeys() error {
 		return fmt.Errorf("failed to decode JWKS: %w", err)
 	}
 
-	c.cache.mu.Lock()
-	defer c.cache.mu.Unlock()
-
-	c.cache.keys = make(map[string]*rsa.PublicKey)
+	newKeys := make(map[string]*rsa.PublicKey)
 	for _, jwk := range jwks.Keys {
 		pubKey, err := parseRSAPublicKey(jwk.N, jwk.E)
 		if err != nil {
 			continue
 		}
-		c.cache.keys[jwk.Kid] = pubKey
+		newKeys[jwk.Kid] = pubKey
 	}
-	c.cache.expiresAt = time.Now().Add(24 * time.Hour)
+	// Only replace keys if we parsed at least one — empty set likely means parse errors
+	if len(newKeys) > 0 {
+		c.cache.keys = newKeys
+	}
+	// 1-hour TTL: tighter window if Apple emergency-rotates a compromised key.
+	// 24h was too long — a revoked key would remain trusted for up to a day.
+	c.cache.expiresAt = time.Now().Add(1 * time.Hour)
 	return nil
 }
 
@@ -128,12 +140,16 @@ func parseRSAPublicKey(nStr, eStr string) (*rsa.PublicKey, error) {
 
 func (c *AppleJWKSClient) GetPublicKey(kid string) (*rsa.PublicKey, error) {
 	c.cache.mu.RLock()
-	if key, ok := c.cache.keys[kid]; ok && time.Now().Before(c.cache.expiresAt) {
-		c.cache.mu.RUnlock()
-		return key, nil
-	}
+	key, ok := c.cache.keys[kid]
+	fresh := time.Now().Before(c.cache.expiresAt)
 	c.cache.mu.RUnlock()
 
+	if ok && fresh {
+		return key, nil
+	}
+
+	// Cache miss or stale — refresh. fetchKeys uses double-checked locking
+	// so concurrent calls only result in one actual HTTP request to Apple.
 	if err := c.fetchKeys(); err != nil {
 		return nil, err
 	}

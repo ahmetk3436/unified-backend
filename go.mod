@@ -6,7 +6,7 @@ require (
 	github.com/getsentry/sentry-go v0.42.0
 	github.com/getsentry/sentry-go/fiber v0.42.0
 	github.com/gofiber/contrib/jwt v1.1.2
-	github.com/gofiber/fiber/v2 v2.52.11
+	github.com/gofiber/fiber/v2 v2.52.12
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	golang.org/x/crypto v0.47.0
