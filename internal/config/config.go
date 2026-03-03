@@ -55,6 +55,9 @@ type Config struct {
 
 	// File uploads root directory (absolute path preferred; defaults to ./uploads)
 	UploadsRoot string
+
+	// EmotionSenseML service URL for async emotion analysis on journal entries
+	EmotionSenseMLURL string
 }
 
 func Load() *Config {
@@ -102,6 +105,8 @@ func Load() *Config {
 		AppsConfigPath: getEnv("APPS_CONFIG_PATH", "apps.json"),
 
 		UploadsRoot: getEnv("UPLOADS_ROOT", "./uploads"),
+
+		EmotionSenseMLURL: getEnv("EMOTION_SENSE_ML_URL", "http://esg8o8k08cgw4o44g8kkkc8g.89.47.113.196.sslip.io"),
 	}
 }
 

@@ -30,7 +30,7 @@ func (p *DaiylyPlugin) Models() []interface{} {
 }
 
 func (p *DaiylyPlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *config.Config) {
-	svc := NewJournalService(db, cfg.GLMAPIKey, cfg.GLMAPIURL, cfg.GLMModel, cfg.AITimeout, cfg.OpenAIAPIKey, cfg.OpenAIModel)
+	svc := NewJournalService(db, cfg.GLMAPIKey, cfg.GLMAPIURL, cfg.GLMModel, cfg.AITimeout, cfg.OpenAIAPIKey, cfg.OpenAIModel, cfg.EmotionSenseMLURL)
 	handler := NewJournalHandler(svc)
 
 	// Per-user rate limiter for AI-backed endpoints. Keyed on JWT token prefix so each

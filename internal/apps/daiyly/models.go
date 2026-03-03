@@ -17,12 +17,15 @@ type JournalEntry struct {
 	PhotoURL   string         `gorm:"type:text" json:"photo_url"`
 	AudioURL   string         `gorm:"type:text" json:"audio_url"`
 	Transcript string         `gorm:"type:text" json:"transcript"`
-	CardColor  string         `gorm:"type:varchar(7)" json:"card_color"`
-	EntryDate time.Time      `gorm:"index" json:"entry_date"`
-	IsPrivate bool           `gorm:"default:true" json:"is_private"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	CardColor          string         `gorm:"type:varchar(7)" json:"card_color"`
+	EntryDate          time.Time      `gorm:"index" json:"entry_date"`
+	IsPrivate          bool           `gorm:"default:true" json:"is_private"`
+	DetectedEmotion    string         `gorm:"column:detected_emotion;default:''" json:"detected_emotion"`
+	EmotionScores      *string        `gorm:"column:emotion_scores;type:jsonb" json:"emotion_scores,omitempty"`
+	EmotionAnalyzedAt  *time.Time     `gorm:"column:emotion_analyzed_at" json:"emotion_analyzed_at,omitempty"`
+	CreatedAt          time.Time      `json:"created_at"`
+	UpdatedAt          time.Time      `json:"updated_at"`
+	DeletedAt          gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 type JournalStreak struct {

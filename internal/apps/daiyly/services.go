@@ -2,12 +2,14 @@ package daiyly
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -52,17 +54,18 @@ func (f *ContentFilterService) FilterContent(content string) (bool, string) {
 }
 
 type JournalService struct {
-	db             *gorm.DB
-	contentFilter  *ContentFilterService
-	aiAPIKey       string
-	aiAPIURL       string
-	aiModel        string
-	aiTimeout      time.Duration
-	openAIAPIKey   string
-	openAIModel    string
+	db                *gorm.DB
+	contentFilter     *ContentFilterService
+	aiAPIKey          string
+	aiAPIURL          string
+	aiModel           string
+	aiTimeout         time.Duration
+	openAIAPIKey      string
+	openAIModel       string
+	emotionSenseMLURL string
 }
 
-func NewJournalService(db *gorm.DB, aiAPIKey, aiAPIURL, aiModel string, aiTimeout time.Duration, openAIAPIKey, openAIModel string) *JournalService {
+func NewJournalService(db *gorm.DB, aiAPIKey, aiAPIURL, aiModel string, aiTimeout time.Duration, openAIAPIKey, openAIModel, emotionSenseMLURL string) *JournalService {
 	if aiAPIURL == "" {
 		aiAPIURL = "https://api.z.ai/api/paas/v4/chat/completions"
 	}
@@ -76,13 +79,14 @@ func NewJournalService(db *gorm.DB, aiAPIKey, aiAPIURL, aiModel string, aiTimeou
 		openAIModel = "gpt-4o-mini"
 	}
 	return &JournalService{
-		db:           db,
-		aiAPIKey:     aiAPIKey,
-		aiAPIURL:     aiAPIURL,
-		aiModel:      aiModel,
-		aiTimeout:    aiTimeout,
-		openAIAPIKey: openAIAPIKey,
-		openAIModel:  openAIModel,
+		db:                db,
+		aiAPIKey:          aiAPIKey,
+		aiAPIURL:          aiAPIURL,
+		aiModel:           aiModel,
+		aiTimeout:         aiTimeout,
+		openAIAPIKey:      openAIAPIKey,
+		openAIModel:       openAIModel,
+		emotionSenseMLURL: emotionSenseMLURL,
 	}
 }
 
@@ -168,6 +172,9 @@ func (s *JournalService) CreateEntry(appID string, userID uuid.UUID, req CreateJ
 	if s.aiAPIKey != "" && entry.Content != "" {
 		go s.analyzeEntryAsync(appID, userID, entry.ID)
 	}
+
+	// Fire async emotion analysis (non-blocking)
+	s.analyzeEmotionAsync(appID, entry.ID.String(), entry.Content)
 
 	return &entry, nil
 }
@@ -327,6 +334,11 @@ func (s *JournalService) UpdateEntry(appID string, userID uuid.UUID, entryID uui
 
 	if err := s.db.Save(entry).Error; err != nil {
 		return nil, err
+	}
+
+	// Fire async emotion analysis when content was updated (non-blocking)
+	if req.Content != nil && *req.Content != "" {
+		s.analyzeEmotionAsync(appID, entry.ID.String(), entry.Content)
 	}
 
 	return entry, nil
@@ -728,6 +740,79 @@ func (s *JournalService) callOpenAIChat(systemPrompt, userPrompt string) (string
 	}
 
 	return content, nil
+}
+
+// --- EmotionSenseML ---
+
+// analyzeEmotionAsync calls EmotionSenseML in a goroutine after entry creation or content update.
+// It updates the entry with detected_emotion, emotion_scores, and emotion_analyzed_at.
+// Never blocks the main request path. All failures are silently swallowed.
+func (s *JournalService) analyzeEmotionAsync(appID, entryID, content string) {
+	if s.emotionSenseMLURL == "" || len(content) < 10 {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		encoded := url.QueryEscape(content)
+		req, err := http.NewRequestWithContext(ctx, "POST",
+			s.emotionSenseMLURL+"/api/v1/analyze/text?content="+encoded, nil)
+		if err != nil {
+			return
+		}
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			return
+		}
+
+		var result struct {
+			DominantEmotion string `json:"dominantEmotion"`
+			Emotions        []struct {
+				Type  string  `json:"type"`
+				Score float64 `json:"score"`
+			} `json:"emotions"`
+		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return
+		}
+
+		if result.DominantEmotion == "" {
+			return
+		}
+
+		// Normalize known label typos from the voice model that may bleed into text responses.
+		emotionMap := map[string]string{
+			"suprised": "surprise",
+			"fearful":  "fear",
+		}
+		emotion := result.DominantEmotion
+		if normalized, ok := emotionMap[emotion]; ok {
+			emotion = normalized
+		}
+
+		scoresJSON, err := json.Marshal(result.Emotions)
+		if err != nil {
+			return
+		}
+		scoresStr := string(scoresJSON)
+		now := time.Now()
+
+		s.db.Model(&JournalEntry{}).
+			Where("id = ? AND app_id = ?", entryID, appID).
+			Updates(map[string]interface{}{
+				"detected_emotion":    emotion,
+				"emotion_scores":      scoresStr,
+				"emotion_analyzed_at": now,
+			})
+	}()
 }
 
 // --- AI Service Methods ---
