@@ -1,16 +1,22 @@
 package driftoff
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
+	"net/http"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/config"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/tenant"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var (
@@ -21,12 +27,113 @@ var (
 	ErrNotOwner        = errors.New("not the owner of this session")
 )
 
-type SleepService struct {
-	db *gorm.DB
+// coachCacheEntry is a simple in-memory cache entry for sleep coach responses.
+type coachCacheEntry struct {
+	content   string
+	cachedAt  time.Time
 }
 
-func NewSleepService(db *gorm.DB) *SleepService {
-	return &SleepService{db: db}
+type SleepService struct {
+	db           *gorm.DB
+	aiAPIKey     string
+	aiModel      string
+	aiTimeout    time.Duration
+	coachCache   map[string]coachCacheEntry
+	coachCacheMu sync.Mutex
+}
+
+func NewSleepService(db *gorm.DB, cfg *config.Config) *SleepService {
+	model := cfg.OpenAIModel
+	if model == "" {
+		model = "gpt-4o-mini"
+	}
+	timeout := cfg.AITimeout
+	if timeout == 0 {
+		timeout = 60 * time.Second
+	}
+	return &SleepService{
+		db:         db,
+		aiAPIKey:   cfg.OpenAIAPIKey,
+		aiModel:    model,
+		aiTimeout:  timeout,
+		coachCache: make(map[string]coachCacheEntry),
+	}
+}
+
+// --- OpenAI helper (same pattern as daiyly) ---
+
+type sleepAIChatRequest struct {
+	Model    string           `json:"model"`
+	Messages []sleepAIMessage `json:"messages"`
+}
+
+type sleepAIMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type sleepAIChatResponse struct {
+	Choices []struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	} `json:"choices"`
+}
+
+func (s *SleepService) callOpenAI(systemPrompt, userPrompt string) (string, error) {
+	if s.aiAPIKey == "" {
+		return "", fmt.Errorf("openai api key not configured")
+	}
+
+	reqBody := sleepAIChatRequest{
+		Model: s.aiModel,
+		Messages: []sleepAIMessage{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userPrompt},
+		},
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+s.aiAPIKey)
+
+	client := &http.Client{Timeout: s.aiTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("openai request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("openai returned status %d", resp.StatusCode)
+	}
+
+	var chatResp sleepAIChatResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&chatResp); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
+	if len(chatResp.Choices) == 0 {
+		return "", fmt.Errorf("no choices in response")
+	}
+
+	content := strings.TrimSpace(chatResp.Choices[0].Message.Content)
+	// Strip markdown code fences if present.
+	if strings.HasPrefix(content, "```") {
+		lines := strings.Split(content, "\n")
+		if len(lines) > 2 {
+			content = strings.Join(lines[1:len(lines)-1], "\n")
+		}
+	}
+
+	return content, nil
 }
 
 func (s *SleepService) Create(appID string, userID uuid.UUID, req CreateSleepRequest) (*SleepResponse, error) {
@@ -309,6 +416,26 @@ func (s *SleepService) GetStats(appID string, userID uuid.UUID, days int) (*Stat
 		}
 	}
 
+	// Bedtime variance (standard deviation in minutes)
+	var bedtimeMinutesSlice []float64
+	for _, sess := range sessions {
+		h, m := sess.Bedtime.Hour(), sess.Bedtime.Minute()
+		bm := float64(h*60 + m)
+		if bm < 720 { // before noon = after midnight
+			bm += 1440
+		}
+		bedtimeMinutesSlice = append(bedtimeMinutesSlice, bm)
+	}
+	if len(bedtimeMinutesSlice) > 1 {
+		avgBM := totalBedtimeMinutes / n
+		varianceSum := 0.0
+		for _, bm := range bedtimeMinutesSlice {
+			d := bm - avgBM
+			varianceSum += d * d
+		}
+		resp.BedtimeVarianceMinutes = math.Round(math.Sqrt(varianceSum/n)*10) / 10
+	}
+
 	// Score trend
 	if len(sessions) >= 3 {
 		firstHalf := sessions[:len(sessions)/2]
@@ -549,4 +676,413 @@ func (s *SleepService) toResponse(sess SleepSession) *SleepResponse {
 	}
 
 	return resp
+}
+
+// --- AI-powered methods ---
+
+// GetSleepCoach returns a personalised sleep coaching message from GPT-4o-mini.
+// Results are cached per (appID+userID) for 6 hours to avoid redundant API calls.
+func (s *SleepService) GetSleepCoach(appID string, userID uuid.UUID) (string, error) {
+	cacheKey := appID + ":" + userID.String()
+
+	s.coachCacheMu.Lock()
+	entry, ok := s.coachCache[cacheKey]
+	s.coachCacheMu.Unlock()
+
+	if ok && time.Since(entry.cachedAt) < 6*time.Hour {
+		return entry.content, nil
+	}
+
+	// Fetch last 30 sleep sessions.
+	var sessions []SleepSession
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ?", userID).
+		Order("bedtime DESC").
+		Limit(30).
+		Find(&sessions).Error; err != nil {
+		return "", fmt.Errorf("fetch sessions: %w", err)
+	}
+
+	if len(sessions) == 0 {
+		return "Not enough sleep data yet. Log at least one session and check back!", nil
+	}
+
+	// Fetch last 30 caffeine logs.
+	var caffeineLogs []DailyCaffeineLog
+	_ = s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ?", userID).
+		Order("log_date DESC").
+		Limit(30).
+		Find(&caffeineLogs).Error
+
+	// Build context string.
+	var ctx strings.Builder
+	ctx.WriteString("Sleep sessions (most recent first):\n")
+	for _, sess := range sessions {
+		durationHours := float64(sess.DurationMinutes) / 60.0
+		ctx.WriteString(fmt.Sprintf("- Date: %s | Duration: %.1fh | Score: %d | Efficiency: %.0f%% | Bedtime: %s | Wake: %s",
+			sess.Bedtime.Format("2006-01-02"),
+			durationHours,
+			sess.Score,
+			sess.Efficiency,
+			sess.Bedtime.Format("15:04"),
+			sess.WakeTime.Format("15:04"),
+		))
+		if sess.Notes != "" {
+			ctx.WriteString(" | Notes: " + sess.Notes)
+		}
+		ctx.WriteString("\n")
+	}
+
+	if len(caffeineLogs) > 0 {
+		ctx.WriteString("\nCaffeine & exercise logs (most recent first):\n")
+		for _, cl := range caffeineLogs {
+			ctx.WriteString(fmt.Sprintf("- Date: %s | Caffeine: %dmg | Exercise: %dmin",
+				cl.LogDate.Format("2006-01-02"),
+				cl.CaffeineML,
+				cl.ExerciseMin,
+			))
+			if cl.LastCupAt != nil {
+				ctx.WriteString(" | Last cup at: " + cl.LastCupAt.Format("15:04"))
+			}
+			ctx.WriteString("\n")
+		}
+	}
+
+	contextStr := ctx.String()
+	// Cap at 20K chars.
+	if len(contextStr) > 20000 {
+		contextStr = contextStr[:20000]
+	}
+
+	systemPrompt := "You are DriftOff, an expert sleep coach. Analyze this user's sleep data from the last 30 days. Identify: 1) sleep debt trends, 2) consistency patterns (irregular schedules harm deep sleep), 3) what nights had best/worst sleep and why, 4) specific actionable recommendations for the next 7 days. Be specific, evidence-based, and warm. Max 400 words."
+
+	content, err := s.callOpenAI(systemPrompt, contextStr)
+	if err != nil {
+		return "", err
+	}
+
+	s.coachCacheMu.Lock()
+	s.coachCache[cacheKey] = coachCacheEntry{content: content, cachedAt: time.Now()}
+	s.coachCacheMu.Unlock()
+
+	return content, nil
+}
+
+// GetDoctorReport generates a clinical sleep summary suitable for a doctor appointment.
+func (s *SleepService) GetDoctorReport(appID string, userID uuid.UUID) (string, error) {
+	var sessions []SleepSession
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ?", userID).
+		Order("bedtime DESC").
+		Limit(30).
+		Find(&sessions).Error; err != nil {
+		return "", fmt.Errorf("fetch sessions: %w", err)
+	}
+
+	if len(sessions) == 0 {
+		return "No sleep sessions recorded. Cannot generate a clinical report.", nil
+	}
+
+	// Compute statistics.
+	var totalDuration, totalScore, totalEfficiency float64
+	var bedtimeMinutes []float64
+
+	for _, sess := range sessions {
+		totalDuration += float64(sess.DurationMinutes) / 60.0
+		totalScore += float64(sess.Score)
+		totalEfficiency += sess.Efficiency
+
+		h, m := sess.Bedtime.Hour(), sess.Bedtime.Minute()
+		bm := float64(h*60 + m)
+		if bm < 720 { // before noon = after midnight
+			bm += 1440
+		}
+		bedtimeMinutes = append(bedtimeMinutes, bm)
+	}
+
+	n := float64(len(sessions))
+	avgDuration := totalDuration / n
+	avgScore := totalScore / n
+	avgEfficiency := totalEfficiency / n
+
+	// Bedtime variance.
+	avgBedtime := 0.0
+	for _, bm := range bedtimeMinutes {
+		avgBedtime += bm
+	}
+	avgBedtime /= float64(len(bedtimeMinutes))
+	variance := 0.0
+	for _, bm := range bedtimeMinutes {
+		d := bm - avgBedtime
+		variance += d * d
+	}
+	variance /= float64(len(bedtimeMinutes))
+	bedtimeVarianceMin := math.Sqrt(variance)
+
+	// Sleep debt (vs 8h goal over 14 days).
+	rollingDays := 14
+	sleepDebt := float64(rollingDays)*8.0 - totalDuration
+	if sleepDebt < 0 {
+		sleepDebt = 0
+	}
+
+	statsContext := fmt.Sprintf(
+		"Patient sleep data summary:\n"+
+			"Total sessions tracked: %d\n"+
+			"Period: last 30 sessions\n"+
+			"Average sleep duration: %.1f hours\n"+
+			"Average sleep score: %.0f/100\n"+
+			"Average sleep efficiency: %.1f%%\n"+
+			"Sleep debt (14-day rolling, 8h goal): %.1f hours\n"+
+			"Bedtime consistency (standard deviation): %.0f minutes\n",
+		len(sessions),
+		avgDuration,
+		avgScore,
+		avgEfficiency,
+		sleepDebt,
+		bedtimeVarianceMin,
+	)
+
+	// Cap at 20K chars (safety).
+	if len(statsContext) > 20000 {
+		statsContext = statsContext[:20000]
+	}
+
+	systemPrompt := "Generate a clinical sleep summary for a doctor appointment. Include: total sessions tracked, avg sleep duration, sleep efficiency, sleep debt, sleep schedule consistency (bedtime variance in minutes), notable patterns, and any concerning trends. Format in clear medical language. Be factual and concise."
+
+	content, err := s.callOpenAI(systemPrompt, statsContext)
+	if err != nil {
+		return "", err
+	}
+
+	return content, nil
+}
+
+// GetHygieneScore scores sleep hygiene across 4 dimensions using the last 14 sessions.
+func (s *SleepService) GetHygieneScore(appID string, userID uuid.UUID) (*HygieneScoreResponse, error) {
+	var sessions []SleepSession
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ?", userID).
+		Order("bedtime DESC").
+		Limit(14).
+		Find(&sessions).Error; err != nil {
+		return nil, fmt.Errorf("fetch sessions: %w", err)
+	}
+
+	if len(sessions) == 0 {
+		return &HygieneScoreResponse{
+			Score:      0,
+			Grade:      "N/A",
+			Dimensions: map[string]int{"consistency": 0, "duration": 0, "efficiency": 0, "streak": 0},
+			Insight:    "No sleep data yet. Start logging your sleep to get your hygiene score.",
+		}, nil
+	}
+
+	// 1. Consistency: bedtime variance.
+	var bedtimeMinutes []float64
+	for _, sess := range sessions {
+		h, m := sess.Bedtime.Hour(), sess.Bedtime.Minute()
+		bm := float64(h*60 + m)
+		if bm < 720 {
+			bm += 1440
+		}
+		bedtimeMinutes = append(bedtimeMinutes, bm)
+	}
+	avgBedtime := 0.0
+	for _, bm := range bedtimeMinutes {
+		avgBedtime += bm
+	}
+	avgBedtime /= float64(len(bedtimeMinutes))
+	variance := 0.0
+	for _, bm := range bedtimeMinutes {
+		d := bm - avgBedtime
+		variance += d * d
+	}
+	variance /= float64(len(bedtimeMinutes))
+	bedtimeStdDev := math.Sqrt(variance)
+
+	consistencyScore := 5
+	switch {
+	case bedtimeStdDev < 30:
+		consistencyScore = 25
+	case bedtimeStdDev < 60:
+		consistencyScore = 15
+	case bedtimeStdDev < 90:
+		consistencyScore = 10
+	}
+
+	// 2. Duration: average sleep hours.
+	var totalDuration float64
+	for _, sess := range sessions {
+		totalDuration += float64(sess.DurationMinutes) / 60.0
+	}
+	avgDuration := totalDuration / float64(len(sessions))
+
+	durationScore := 5
+	switch {
+	case avgDuration >= 7.5:
+		durationScore = 25
+	case avgDuration >= 7.0:
+		durationScore = 20
+	case avgDuration >= 6.0:
+		durationScore = 15
+	}
+
+	// 3. Efficiency: average efficiency.
+	var totalEff float64
+	for _, sess := range sessions {
+		totalEff += sess.Efficiency
+	}
+	avgEff := totalEff / float64(len(sessions))
+
+	efficiencyScore := 5
+	switch {
+	case avgEff >= 85:
+		efficiencyScore = 25
+	case avgEff >= 75:
+		efficiencyScore = 18
+	case avgEff >= 65:
+		efficiencyScore = 12
+	}
+
+	// 4. Streak: fetch from streak table.
+	var streak SleepStreak
+	streakDays := 0
+	if err := s.db.Scopes(tenant.ForTenant(appID)).Where("user_id = ?", userID).First(&streak).Error; err == nil {
+		streakDays = streak.CurrentStreak
+	}
+
+	streakScore := 5
+	switch {
+	case streakDays >= 14:
+		streakScore = 25
+	case streakDays >= 7:
+		streakScore = 18
+	case streakDays >= 3:
+		streakScore = 12
+	}
+
+	total := consistencyScore + durationScore + efficiencyScore + streakScore
+
+	// Grade mapping.
+	grade := "F"
+	switch {
+	case total >= 93:
+		grade = "A+"
+	case total >= 90:
+		grade = "A"
+	case total >= 87:
+		grade = "A-"
+	case total >= 83:
+		grade = "B+"
+	case total >= 80:
+		grade = "B"
+	case total >= 77:
+		grade = "B-"
+	case total >= 73:
+		grade = "C+"
+	case total >= 70:
+		grade = "C"
+	case total >= 67:
+		grade = "C-"
+	case total >= 60:
+		grade = "D"
+	}
+
+	// Insight: pick the weakest dimension.
+	insight := "Keep logging your sleep consistently to improve your score."
+	minDim, minScore := "consistency", consistencyScore
+	if durationScore < minScore {
+		minDim, minScore = "duration", durationScore
+	}
+	if efficiencyScore < minScore {
+		minDim, minScore = "efficiency", efficiencyScore
+	}
+	if streakScore < minScore {
+		minDim, _ = "streak", streakScore
+	}
+
+	switch minDim {
+	case "consistency":
+		insight = fmt.Sprintf("Your bedtime varies by ~%.0f minutes. Try going to bed within the same 30-minute window each night to improve deep sleep.", bedtimeStdDev)
+	case "duration":
+		insight = fmt.Sprintf("You're averaging %.1f hours of sleep. Aim for 7.5+ hours to fully restore your body and mind.", avgDuration)
+	case "efficiency":
+		insight = fmt.Sprintf("Your sleep efficiency is %.0f%%. Avoid screens 1 hour before bed and keep your room cool to spend more time actually sleeping.", avgEff)
+	case "streak":
+		insight = fmt.Sprintf("You've logged %d consecutive nights. Building a %d-night streak will sharpen your insights significantly.", streakDays, 7)
+	}
+
+	return &HygieneScoreResponse{
+		Score: total,
+		Grade: grade,
+		Dimensions: map[string]int{
+			"consistency": consistencyScore,
+			"duration":    durationScore,
+			"efficiency":  efficiencyScore,
+			"streak":      streakScore,
+		},
+		Insight: insight,
+	}, nil
+}
+
+// LogCaffeine upserts today's caffeine log for the user (one record per user per day).
+func (s *SleepService) LogCaffeine(appID string, userID uuid.UUID, caffeineML, exerciseMin int, lastCupAt *time.Time) (*DailyCaffeineLog, error) {
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+
+	log := DailyCaffeineLog{
+		ID:          uuid.New(),
+		AppID:       appID,
+		UserID:      userID,
+		LogDate:     today,
+		CaffeineML:  caffeineML,
+		ExerciseMin: exerciseMin,
+		LastCupAt:   lastCupAt,
+	}
+
+	// Upsert: on conflict (app_id + user_id + log_date) update the fields.
+	result := s.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "app_id"}, {Name: "user_id"}, {Name: "log_date"}},
+		DoUpdates: clause.AssignmentColumns([]string{"caffeine_ml", "exercise_min", "last_cup_at", "updated_at"}),
+	}).Create(&log)
+
+	if result.Error != nil {
+		// Fallback: find-and-update if the upsert path fails (e.g. no unique index yet).
+		var existing DailyCaffeineLog
+		if err := s.db.Scopes(tenant.ForTenant(appID)).
+			Where("user_id = ? AND log_date = ?", userID, today).
+			First(&existing).Error; err == nil {
+			existing.CaffeineML = caffeineML
+			existing.ExerciseMin = exerciseMin
+			existing.LastCupAt = lastCupAt
+			if err2 := s.db.Save(&existing).Error; err2 != nil {
+				return nil, fmt.Errorf("update caffeine log: %w", err2)
+			}
+			return &existing, nil
+		}
+		return nil, fmt.Errorf("create caffeine log: %w", result.Error)
+	}
+
+	// Re-fetch to get the actual stored record (handles upsert returning stale ID).
+	var stored DailyCaffeineLog
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ? AND log_date = ?", userID, today).
+		First(&stored).Error; err != nil {
+		return &log, nil
+	}
+	return &stored, nil
+}
+
+// GetCaffeineLog returns the last N days of caffeine logs for the user.
+func (s *SleepService) GetCaffeineLog(appID string, userID uuid.UUID, days int) ([]DailyCaffeineLog, error) {
+	since := time.Now().UTC().AddDate(0, 0, -days)
+	var logs []DailyCaffeineLog
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ? AND log_date >= ?", userID, since).
+		Order("log_date DESC").
+		Find(&logs).Error; err != nil {
+		return nil, err
+	}
+	return logs, nil
 }

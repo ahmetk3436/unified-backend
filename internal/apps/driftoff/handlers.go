@@ -2,6 +2,7 @@ package driftoff
 
 import (
 	"strconv"
+	"time"
 
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/tenant"
 	"github.com/gofiber/fiber/v2"
@@ -234,4 +235,117 @@ func (h *SleepHandler) GetSleepDebt(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(resp)
+}
+
+// GetSleepCoach returns AI-generated personalised sleep coaching. Cached 6h per user.
+func (h *SleepHandler) GetSleepCoach(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
+	}
+
+	coaching, err := h.svc.GetSleepCoach(appID, userID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "coaching unavailable")
+	}
+
+	return c.JSON(fiber.Map{"coaching": coaching})
+}
+
+// GetDoctorReport returns a clinical sleep summary. PREMIUM feature.
+func (h *SleepHandler) GetDoctorReport(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
+	}
+
+	// PREMIUM feature: gating is noted with a TODO below pending subscription check wiring.
+	// TODO: Check subscription entitlement here once RevenueCat webhook is wired up.
+	// if !isPremium(c) { return c.Status(fiber.StatusPaymentRequired).JSON(...) }
+
+	report, err := h.svc.GetDoctorReport(appID, userID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "report unavailable")
+	}
+
+	return c.JSON(fiber.Map{"report": report})
+}
+
+// GetHygieneScore returns the sleep hygiene score breakdown. Free feature.
+func (h *SleepHandler) GetHygieneScore(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
+	}
+
+	score, err := h.svc.GetHygieneScore(appID, userID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "hygiene score unavailable")
+	}
+
+	return c.JSON(score)
+}
+
+// LogCaffeine upserts today's caffeine and exercise log.
+func (h *SleepHandler) LogCaffeine(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
+	}
+
+	var req LogCaffeineRequest
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
+	}
+
+	if req.CaffeineML < 0 || req.CaffeineML > 10000 {
+		return fiber.NewError(fiber.StatusBadRequest, "caffeine_ml must be between 0 and 10000")
+	}
+	if req.ExerciseMin < 0 || req.ExerciseMin > 1440 {
+		return fiber.NewError(fiber.StatusBadRequest, "exercise_min must be between 0 and 1440")
+	}
+
+	var lastCupAt *time.Time
+	if req.LastCupAt != nil && *req.LastCupAt != "" {
+		t, err := time.Parse(time.RFC3339, *req.LastCupAt)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid last_cup_at format (use RFC3339)")
+		}
+		lastCupAt = &t
+	}
+
+	log, err := h.svc.LogCaffeine(appID, userID, req.CaffeineML, req.ExerciseMin, lastCupAt)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "caffeine log failed")
+	}
+
+	return c.Status(fiber.StatusCreated).JSON(log)
+}
+
+// GetCaffeineLogs returns caffeine logs for the last N days.
+func (h *SleepHandler) GetCaffeineLogs(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
+	}
+
+	days, _ := strconv.Atoi(c.Query("days", "30"))
+	if days < 1 {
+		days = 1
+	}
+	if days > 90 {
+		days = 90
+	}
+
+	logs, err := h.svc.GetCaffeineLog(appID, userID, days)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "fetch caffeine logs failed")
+	}
+
+	return c.JSON(fiber.Map{"logs": logs, "days": days})
 }

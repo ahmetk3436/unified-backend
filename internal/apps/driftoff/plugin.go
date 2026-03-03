@@ -18,11 +18,12 @@ func (p *DriftoffPlugin) Models() []interface{} {
 	return []interface{}{
 		&SleepSession{},
 		&SleepStreak{},
+		&DailyCaffeineLog{},
 	}
 }
 
 func (p *DriftoffPlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *config.Config) {
-	svc := NewSleepService(db)
+	svc := NewSleepService(db, cfg)
 	handler := NewSleepHandler(svc)
 
 	// Sleep CRUD routes
@@ -33,6 +34,13 @@ func (p *DriftoffPlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *c
 	router.Get("/sleeps/stats", handler.GetStats)
 	router.Get("/sleeps/debt", handler.GetSleepDebt)
 	router.Post("/sleeps/batch", handler.BatchImport)
+
+	// AI-powered routes (MUST be before parameterized routes)
+	router.Get("/sleeps/coach", handler.GetSleepCoach)
+	router.Get("/sleeps/doctor-report", handler.GetDoctorReport)
+	router.Get("/sleeps/hygiene", handler.GetHygieneScore)
+	router.Post("/sleeps/caffeine", handler.LogCaffeine)
+	router.Get("/sleeps/caffeine", handler.GetCaffeineLogs)
 
 	// Parameterized routes (MUST be last)
 	router.Get("/sleeps/:id", handler.Get)

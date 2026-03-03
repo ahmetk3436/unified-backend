@@ -22,9 +22,24 @@ type SleepSession struct {
 	SoundsJSON      string         `gorm:"type:jsonb;default:'[]'" json:"-"`
 	AlarmTime       *time.Time     `json:"alarm_time"`
 	AlarmPhase      string         `gorm:"size:20" json:"alarm_phase"`
+	Notes           string         `gorm:"type:text" json:"notes"`           // Optional user note for session
+	HygieneScore    *int           `json:"hygiene_score"`                    // 0-100 score computed async
 	CreatedAt       time.Time      `json:"created_at"`
 	UpdatedAt       time.Time      `json:"updated_at"`
 	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// DailyCaffeineLog records caffeine intake and exercise for a single day.
+type DailyCaffeineLog struct {
+	ID          uuid.UUID  `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	AppID       string     `gorm:"size:50;not null;index" json:"app_id"`
+	UserID      uuid.UUID  `gorm:"type:uuid;not null;index" json:"user_id"`
+	LogDate     time.Time  `gorm:"not null;index" json:"log_date"`
+	CaffeineML  int        `json:"caffeine_ml"`  // mg of caffeine
+	LastCupAt   *time.Time `json:"last_cup_at"`  // time of last cup (used for correlation)
+	ExerciseMin int        `json:"exercise_min"` // minutes of exercise that day
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 // SleepStreak tracks consecutive nights of sleep logging.
@@ -115,14 +130,15 @@ type StreakResponse struct {
 }
 
 type StatsResponse struct {
-	TotalSessions     int                `json:"total_sessions"`
-	AverageScore      float64            `json:"average_score"`
-	AverageDuration   float64            `json:"average_duration"`
-	AverageEfficiency float64            `json:"average_efficiency"`
-	AverageBedtime    string             `json:"average_bedtime"`
-	ScoreTrend        string             `json:"score_trend"`
-	DailyScores       []DailyScore       `json:"daily_scores"`
-	PhaseBreakdown    map[string]float64 `json:"phase_breakdown"`
+	TotalSessions          int                `json:"total_sessions"`
+	AverageScore           float64            `json:"average_score"`
+	AverageDuration        float64            `json:"average_duration"`
+	AverageEfficiency      float64            `json:"average_efficiency"`
+	AverageBedtime         string             `json:"average_bedtime"`
+	ScoreTrend             string             `json:"score_trend"`
+	DailyScores            []DailyScore       `json:"daily_scores"`
+	PhaseBreakdown         map[string]float64 `json:"phase_breakdown"`
+	BedtimeVarianceMinutes float64            `json:"bedtime_variance_minutes"`
 }
 
 type DailyScore struct {
@@ -169,4 +185,21 @@ type BatchImportResult struct {
 	ServerID string `json:"server_id"`
 	Status   string `json:"status"`
 	Error    string `json:"error,omitempty"`
+}
+
+// --- Caffeine Log DTOs ---
+
+type LogCaffeineRequest struct {
+	CaffeineML  int     `json:"caffeine_ml"`
+	ExerciseMin int     `json:"exercise_min"`
+	LastCupAt   *string `json:"last_cup_at"` // RFC3339
+}
+
+// --- Hygiene Score ---
+
+type HygieneScoreResponse struct {
+	Score      int               `json:"score"`
+	Grade      string            `json:"grade"`
+	Dimensions map[string]int    `json:"dimensions"`
+	Insight    string            `json:"insight"`
 }
