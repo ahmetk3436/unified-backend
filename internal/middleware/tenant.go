@@ -16,7 +16,6 @@ var tenantSkipPaths = []string{
 	"/api/health",
 	"/api/legal/",
 	"/api/webhooks/", // webhooks use :app_id path param instead
-	"/api/config",     // config endpoint is public but requires X-App-ID header (handled in handler)
 }
 
 // TenantMiddleware extracts app_id from JWT claims, X-App-ID header, or query param.
