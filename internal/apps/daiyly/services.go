@@ -9,7 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -755,12 +754,17 @@ func (s *JournalService) analyzeEmotionAsync(appID, entryID, content string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		encoded := url.QueryEscape(content)
-		req, err := http.NewRequestWithContext(ctx, "POST",
-			s.emotionSenseMLURL+"/api/v1/analyze/text?content="+encoded, nil)
+		reqBody := map[string]string{"content": content}
+		bodyBytes, err := json.Marshal(reqBody)
 		if err != nil {
 			return
 		}
+		req, err := http.NewRequestWithContext(ctx, "POST",
+			s.emotionSenseMLURL+"/api/v1/analyze/text", bytes.NewReader(bodyBytes))
+		if err != nil {
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {

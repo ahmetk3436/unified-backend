@@ -106,7 +106,7 @@ func Load() *Config {
 
 		UploadsRoot: getEnv("UPLOADS_ROOT", "./uploads"),
 
-		EmotionSenseMLURL: getEnv("EMOTION_SENSE_ML_URL", "http://esg8o8k08cgw4o44g8kkkc8g.89.47.113.196.sslip.io"),
+		EmotionSenseMLURL: getEnv("EMOTION_SENSE_ML_URL", "http://89.47.113.196:8001"),
 	}
 }
 
