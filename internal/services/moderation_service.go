@@ -134,6 +134,9 @@ func (s *ModerationService) CreateReport(appID string, reporterID uuid.UUID, req
 	if strings.TrimSpace(req.Reason) == "" {
 		return nil, errors.New("reason is required")
 	}
+	if len(req.Reason) > 500 {
+		return nil, errors.New("reason must be 500 characters or fewer")
+	}
 
 	report := models.Report{
 		ID:          uuid.New(),
@@ -159,10 +162,12 @@ func (s *ModerationService) ListReports(appID string, status string, limit, offs
 	if status != "" {
 		query = query.Where("status = ?", status)
 	}
-	query.Count(&total)
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count reports: %w", err)
+	}
 
 	if err := query.Order("created_at DESC").Limit(limit).Offset(offset).Find(&reports).Error; err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("list reports: %w", err)
 	}
 	return reports, total, nil
 }
@@ -180,10 +185,13 @@ func (s *ModerationService) ActionReport(appID string, reportID uuid.UUID, req *
 			"status":     req.Status,
 			"admin_note": req.AdminNote,
 		})
+	if result.Error != nil {
+		return fmt.Errorf("update report: %w", result.Error)
+	}
 	if result.RowsAffected == 0 {
 		return ErrReportNotFound
 	}
-	return result.Error
+	return nil
 }
 
 func (s *ModerationService) BlockUser(appID string, blockerID, blockedID uuid.UUID) error {

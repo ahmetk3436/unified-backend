@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log/slog"
 	"time"
 
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/database"
@@ -20,7 +21,8 @@ func NewHealthHandler(registry *tenant.Registry) *HealthHandler {
 func (h *HealthHandler) Check(c *fiber.Ctx) error {
 	dbStatus := "ok"
 	if err := database.Ping(); err != nil {
-		dbStatus = "unhealthy: " + err.Error()
+		slog.Error("database ping failed", "err", err)
+		dbStatus = "unhealthy"
 	}
 
 	return c.JSON(dto.HealthResponse{

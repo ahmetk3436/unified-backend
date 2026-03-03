@@ -65,6 +65,9 @@ func (s *AuthService) Register(appID string, req *dto.RegisterRequest) (*dto.Aut
 	if len(req.Email) == 0 {
 		return nil, errors.New("email is required")
 	}
+	if len(req.Email) > 254 {
+		return nil, errors.New("email too long")
+	}
 	if err := validatePassword(req.Password); err != nil {
 		return nil, err
 	}
