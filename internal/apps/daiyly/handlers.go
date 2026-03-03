@@ -1,6 +1,8 @@
 package daiyly
 
 import (
+	"bytes"
+	"encoding/csv"
 	"errors"
 	"log/slog"
 	"strconv"
@@ -578,8 +580,13 @@ func (h *JournalHandler) AISearch(c *fiber.Ctx) error {
 	return c.JSON(result)
 }
 
-// AskJournal answers a natural-language question about the user's journal.
-// POST /journals/ask
+// AskJournal handles POST /journals/ask.
+// It supports two request shapes:
+//   - New (semantic): { "query": "...", "days": 90, "limit": 5 }
+//   - Legacy: { "question": "..." }
+//
+// When "query" is present the new SemanticAsk path is used (embeddings + AI answer).
+// When only "question" is present, the legacy keyword-based AskJournal path is used.
 func (h *JournalHandler) AskJournal(c *fiber.Ctx) error {
 	appID := tenant.GetAppID(c)
 	userID, err := tenant.GetUserID(c)
@@ -596,9 +603,35 @@ func (h *JournalHandler) AskJournal(c *fiber.Ctx) error {
 		})
 	}
 
+	// New semantic shape: "query" field present.
+	if len(req.Query) > 0 {
+		if len(req.Query) > 500 {
+			return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
+				Error: true, Message: "query must be at most 500 characters",
+			})
+		}
+		days := req.Days
+		if days <= 0 || days > 365 {
+			days = 90
+		}
+		limit := req.Limit
+		if limit <= 0 || limit > 20 {
+			limit = 5
+		}
+		result, err := h.service.SemanticAsk(appID, userID, req.Query, days, limit)
+		if err != nil {
+			slog.Error("semantic ask failed", "app", appID, "user", userID, "error", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+				Error: true, Message: "Failed to answer question",
+			})
+		}
+		return c.JSON(result)
+	}
+
+	// Legacy shape: "question" field.
 	if len(req.Question) == 0 {
 		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
-			Error: true, Message: "question is required",
+			Error: true, Message: "query or question is required",
 		})
 	}
 	if len(req.Question) > 1000 {
@@ -612,6 +645,117 @@ func (h *JournalHandler) AskJournal(c *fiber.Ctx) error {
 		slog.Error("ask journal failed", "app", appID, "user", userID, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
 			Error: true, Message: "Failed to answer question",
+		})
+	}
+
+	return c.JSON(result)
+}
+
+// CreateQuickEntry handles POST /journals/quick.
+// Accepts { type, items, mood, mood_score, card_color, entry_date } and saves a formatted JournalEntry.
+func (h *JournalHandler) CreateQuickEntry(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	var req QuickEntryRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
+			Error: true, Message: "Invalid request body",
+		})
+	}
+
+	entry, err := h.service.CreateQuickEntry(appID, userID, req)
+	if err != nil {
+		slog.Error("create quick entry failed", "app", appID, "user", userID, "error", err)
+		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
+			Error: true, Message: err.Error(),
+		})
+	}
+
+	return c.Status(fiber.StatusCreated).JSON(entry)
+}
+
+// Export handles GET /journals/export?format=csv|json.
+// Returns all journal entries for the authenticated user.
+func (h *JournalHandler) Export(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	format := c.Query("format", "json")
+
+	entries, err := h.service.ExportJournals(appID, userID, format)
+	if err != nil {
+		slog.Error("export failed", "app", appID, "user", userID, "error", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "Export failed",
+		})
+	}
+
+	if format == "csv" {
+		var buf bytes.Buffer
+		w := csv.NewWriter(&buf)
+
+		// Header row.
+		_ = w.Write([]string{"date", "mood", "title", "content", "tags", "sentiment", "entry_type"})
+
+		for _, e := range entries {
+			sentiment := e.DetectedEmotion
+			_ = w.Write([]string{
+				e.EntryDate.Format("2006-01-02"),
+				e.MoodEmoji,
+				"", // title field — not currently stored, left empty
+				e.Content,
+				"", // tags field — not currently stored, left empty
+				sentiment,
+				e.EntryType,
+			})
+		}
+		w.Flush()
+		if flushErr := w.Error(); flushErr != nil {
+			slog.Error("csv flush failed", "app", appID, "user", userID, "error", flushErr)
+			return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+				Error: true, Message: "CSV generation failed",
+			})
+		}
+
+		c.Set("Content-Type", "text/csv")
+		c.Set("Content-Disposition", `attachment; filename="journal_export.csv"`)
+		return c.Send(buf.Bytes())
+	}
+
+	// Default: JSON.
+	return c.JSON(fiber.Map{
+		"entries": entries,
+		"total":   len(entries),
+	})
+}
+
+// OnThisDay handles GET /journals/on-this-day.
+// Returns journal entries from the same calendar day (±2 days) in previous years.
+func (h *JournalHandler) OnThisDay(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	result, err := h.service.GetOnThisDay(appID, userID)
+	if err != nil {
+		slog.Error("on-this-day failed", "app", appID, "user", userID, "error", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "Failed to fetch on-this-day entries",
 		})
 	}
 

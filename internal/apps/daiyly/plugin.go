@@ -26,6 +26,7 @@ func (p *DaiylyPlugin) Models() []interface{} {
 		&DailyPromptCache{},
 		&NotificationConfigCache{},
 		&TherapistExportCache{},
+		&JournalEmbedding{},
 	}
 }
 
@@ -94,7 +95,36 @@ func (p *DaiylyPlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *con
 
 	// AI semantic search and ask-your-journal (MUST come before :id catch-all)
 	router.Get("/journals/ai-search", aiLightLimiter, handler.AISearch)
-	router.Post("/journals/ask", aiLightLimiter, handler.AskJournal)
+
+	// askLimiter: 5 req/hr — semantic ask uses embedding + GPT-4o-mini (expensive).
+	askLimiter := limiter.New(limiter.Config{
+		Max:               5,
+		Expiration:        1 * time.Hour,
+		LimiterMiddleware: limiter.SlidingWindow{},
+		KeyGenerator: func(c *fiber.Ctx) string {
+			auth := c.Get("Authorization")
+			if len(auth) > 39 {
+				return "ask:" + auth[7:39]
+			}
+			return "ask:ip:" + c.IP()
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+				"error":   true,
+				"message": "Ask rate limit exceeded. Please try again in an hour.",
+			})
+		},
+	})
+	router.Post("/journals/ask", askLimiter, handler.AskJournal)
+
+	// Quick entry — minimal structured entries (gratitude / bullet / word).
+	router.Post("/journals/quick", handler.CreateQuickEntry)
+
+	// Export — full journal export (JSON default, CSV with ?format=csv).
+	router.Get("/journals/export", handler.Export)
+
+	// On This Day — historical entries from the same calendar day in prior years.
+	router.Get("/journals/on-this-day", handler.OnThisDay)
 
 	// Per-user rate limiters for upload endpoints.
 	// Photo: 20 uploads/hour — prevents disk exhaustion from a single authenticated user.

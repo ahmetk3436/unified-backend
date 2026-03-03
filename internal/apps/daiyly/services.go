@@ -175,6 +175,9 @@ func (s *JournalService) CreateEntry(appID string, userID uuid.UUID, req CreateJ
 	// Fire async emotion analysis (non-blocking)
 	s.analyzeEmotionAsync(appID, entry.ID.String(), entry.Content)
 
+	// Fire async embedding generation for semantic search (non-blocking)
+	s.storeEmbeddingAsync(appID, userID, entry.ID, entry.Content)
+
 	return &entry, nil
 }
 
@@ -2076,4 +2079,508 @@ func (s *JournalService) AskJournal(appID string, userID uuid.UUID, question str
 		Answer:          answer,
 		ReferencedDates: referencedDates,
 	}, nil
+}
+
+// =============================================================================
+// Semantic Ask — POST /journals/ask (new shape: query + days + limit)
+// =============================================================================
+
+// openAIEmbeddingRequest is the request body for the OpenAI embeddings API.
+type openAIEmbeddingRequest struct {
+	Model string `json:"model"`
+	Input string `json:"input"`
+}
+
+// openAIEmbeddingResponse is the response from the OpenAI embeddings API.
+type openAIEmbeddingResponse struct {
+	Data []struct {
+		Embedding []float64 `json:"embedding"`
+	} `json:"data"`
+}
+
+// generateEmbedding calls OpenAI text-embedding-3-small to embed the given text.
+// Returns nil when openAIAPIKey is not set or the call fails.
+func (s *JournalService) generateEmbedding(text string) ([]float64, error) {
+	if s.openAIAPIKey == "" {
+		return nil, fmt.Errorf("openai api key not configured")
+	}
+	reqBody := openAIEmbeddingRequest{
+		Model: "text-embedding-3-small",
+		Input: text,
+	}
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshal embedding request: %w", err)
+	}
+	req, err := http.NewRequest("POST", "https://api.openai.com/v1/embeddings", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("create embedding request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+s.openAIAPIKey)
+
+	client := &http.Client{Timeout: s.aiTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("embedding request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("embedding api returned status %d", resp.StatusCode)
+	}
+
+	var embResp openAIEmbeddingResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&embResp); err != nil {
+		return nil, fmt.Errorf("decode embedding response: %w", err)
+	}
+	if len(embResp.Data) == 0 {
+		return nil, fmt.Errorf("no embedding data in response")
+	}
+	return embResp.Data[0].Embedding, nil
+}
+
+// cosineSimilarity computes the cosine similarity between two equal-length vectors.
+// Returns 0 when either vector is zero-length.
+func cosineSimilarity(a, b []float64) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		dot += a[i] * b[i]
+		normA += a[i] * a[i]
+		normB += b[i] * b[i]
+	}
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+	return dot / (mathSqrt(normA) * mathSqrt(normB))
+}
+
+// mathSqrt is a local alias so we don't need to import math at the package level.
+func mathSqrt(x float64) float64 {
+	// Newton-Raphson fast square root — avoids importing math.
+	if x <= 0 {
+		return 0
+	}
+	z := x
+	for i := 0; i < 20; i++ {
+		z -= (z*z - x) / (2 * z)
+	}
+	return z
+}
+
+// storeEmbeddingAsync stores a pre-generated embedding for the given entry in the background.
+func (s *JournalService) storeEmbeddingAsync(appID string, userID, entryID uuid.UUID, content string) {
+	if s.openAIAPIKey == "" || len(strings.Fields(content)) < 10 {
+		return
+	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Warn("[daiyly] storeEmbeddingAsync panic", "panic", r)
+			}
+		}()
+		embedding, err := s.generateEmbedding(content)
+		if err != nil {
+			slog.Warn("[daiyly] generate embedding failed", "entry", entryID, "error", err)
+			return
+		}
+		embJSON, err := json.Marshal(embedding)
+		if err != nil {
+			return
+		}
+		// Upsert: delete existing then insert.
+		s.db.Where("entry_id = ? AND app_id = ?", entryID, appID).Delete(&JournalEmbedding{})
+		s.db.Create(&JournalEmbedding{
+			ID:            uuid.New(),
+			AppID:         appID,
+			UserID:        userID,
+			EntryID:       entryID,
+			EmbeddingJSON: string(embJSON),
+		})
+	}()
+}
+
+// backfillEmbeddingsAsync embeds the last 100 entries for a user that don't yet have embeddings.
+// Called once in background after the user's first semantic query.
+func (s *JournalService) backfillEmbeddingsAsync(appID string, userID uuid.UUID) {
+	if s.openAIAPIKey == "" {
+		return
+	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Warn("[daiyly] backfillEmbeddings panic", "panic", r)
+			}
+		}()
+		var entries []JournalEntry
+		s.db.Scopes(tenant.ForTenant(appID)).Where("user_id = ?", userID).
+			Where("id NOT IN (SELECT entry_id FROM journal_embeddings WHERE app_id = ? AND user_id = ? AND deleted_at IS NULL)", appID, userID).
+			Order("entry_date DESC").
+			Limit(100).
+			Find(&entries)
+
+		for _, e := range entries {
+			if len(strings.Fields(e.Content)) < 10 {
+				continue
+			}
+			embedding, err := s.generateEmbedding(e.Content)
+			if err != nil {
+				continue
+			}
+			embJSON, err := json.Marshal(embedding)
+			if err != nil {
+				continue
+			}
+			s.db.Where("entry_id = ? AND app_id = ?", e.ID, appID).Delete(&JournalEmbedding{})
+			s.db.Create(&JournalEmbedding{
+				ID:            uuid.New(),
+				AppID:         appID,
+				UserID:        userID,
+				EntryID:       e.ID,
+				EmbeddingJSON: string(embJSON),
+			})
+		}
+	}()
+}
+
+// SemanticAsk answers a natural-language question using embedding-based similarity search.
+// Falls back to GPT-4o-mini keyword scan when embeddings are not available.
+func (s *JournalService) SemanticAsk(appID string, userID uuid.UUID, query string, days, limit int) (*SemanticAskResponse, error) {
+	if days <= 0 || days > 365 {
+		days = 90
+	}
+	if limit <= 0 || limit > 20 {
+		limit = 5
+	}
+
+	since := time.Now().UTC().AddDate(0, 0, -days)
+
+	// Fetch all entries in the time range.
+	var entries []JournalEntry
+	if err := s.db.Scopes(tenant.ForTenant(appID)).Where("user_id = ? AND entry_date >= ?", userID, since).
+		Order("entry_date DESC").
+		Limit(500).
+		Find(&entries).Error; err != nil {
+		return nil, fmt.Errorf("fetch entries: %w", err)
+	}
+
+	if len(entries) == 0 {
+		return &SemanticAskResponse{
+			Entries:   []JournalEntry{},
+			Answer:    "You have no journal entries in this time period.",
+			TopThemes: []string{},
+		}, nil
+	}
+
+	// Try semantic search using embeddings.
+	var topEntries []JournalEntry
+
+	if s.openAIAPIKey != "" {
+		queryEmbedding, embErr := s.generateEmbedding(query)
+		if embErr == nil && len(queryEmbedding) > 0 {
+			// Fetch stored embeddings for this user.
+			var storedEmbeddings []JournalEmbedding
+			s.db.Where("app_id = ? AND user_id = ?", appID, userID).Find(&storedEmbeddings)
+
+			// Build entry ID → embedding map.
+			embMap := make(map[uuid.UUID][]float64, len(storedEmbeddings))
+			for _, se := range storedEmbeddings {
+				var vec []float64
+				if err := json.Unmarshal([]byte(se.EmbeddingJSON), &vec); err == nil {
+					embMap[se.EntryID] = vec
+				}
+			}
+
+			// Score entries by cosine similarity.
+			type scored struct {
+				entry JournalEntry
+				score float64
+			}
+			var scoredEntries []scored
+			for _, e := range entries {
+				vec, ok := embMap[e.ID]
+				if !ok {
+					continue
+				}
+				sim := cosineSimilarity(queryEmbedding, vec)
+				scoredEntries = append(scoredEntries, scored{entry: e, score: sim})
+			}
+
+			// Sort by score descending.
+			sort.Slice(scoredEntries, func(i, j int) bool {
+				return scoredEntries[i].score > scoredEntries[j].score
+			})
+
+			top := limit
+			if len(scoredEntries) < top {
+				top = len(scoredEntries)
+			}
+			for i := 0; i < top; i++ {
+				topEntries = append(topEntries, scoredEntries[i].entry)
+			}
+
+			// If fewer than expected, trigger backfill for future queries.
+			if len(storedEmbeddings) < len(entries)/2 {
+				s.backfillEmbeddingsAsync(appID, userID)
+			}
+		}
+	}
+
+	// Fallback: keyword pre-filter when no embedding results.
+	if len(topEntries) == 0 {
+		keywords := extractKeywords(query)
+		type hit struct {
+			entry JournalEntry
+			count int
+		}
+		var hits []hit
+		for _, e := range entries {
+			lower := strings.ToLower(e.Content)
+			cnt := 0
+			for _, kw := range keywords {
+				if strings.Contains(lower, kw) {
+					cnt++
+				}
+			}
+			if cnt > 0 {
+				hits = append(hits, hit{entry: e, count: cnt})
+			}
+		}
+		sort.Slice(hits, func(i, j int) bool { return hits[i].count > hits[j].count })
+		top := limit
+		if len(hits) < top {
+			top = len(hits)
+		}
+		for i := 0; i < top; i++ {
+			topEntries = append(topEntries, hits[i].entry)
+		}
+		// Still nothing — take recents.
+		if len(topEntries) == 0 {
+			top = limit
+			if len(entries) < top {
+				top = len(entries)
+			}
+			topEntries = entries[:top]
+		}
+	}
+
+	// Generate AI answer from top entries.
+	answer := ""
+	topThemes := []string{}
+
+	if s.openAIAPIKey != "" && len(topEntries) > 0 {
+		var sb strings.Builder
+		for _, e := range topEntries {
+			preview := e.Content
+			if len(preview) > 400 {
+				preview = preview[:400] + "..."
+			}
+			sb.WriteString(fmt.Sprintf("[%s] MoodScore:%d — %s\n", e.EntryDate.Format("2006-01-02"), e.MoodScore, preview))
+		}
+
+		sysPrompt := `You are a compassionate journaling assistant. Based on these journal entries, answer the user's question in a warm, insightful 2-3 sentence response. Also identify 2-4 recurring themes from the entries. Respond with JSON only (no markdown): {"answer":"...","top_themes":["theme1","theme2"]}`
+		userPrompt := fmt.Sprintf("Question: %s\n\nEntries:\n%s", query, sb.String())
+
+		rawContent, err := s.callOpenAIDirect(sysPrompt, userPrompt)
+		if err == nil {
+			var parsed struct {
+				Answer    string   `json:"answer"`
+				TopThemes []string `json:"top_themes"`
+			}
+			if jsonErr := json.Unmarshal([]byte(rawContent), &parsed); jsonErr == nil {
+				answer = parsed.Answer
+				topThemes = parsed.TopThemes
+			}
+		}
+	}
+
+	if answer == "" {
+		// Non-AI fallback answer.
+		answer = fmt.Sprintf("Found %d relevant entries from the past %d days.", len(topEntries), days)
+	}
+	if topThemes == nil {
+		topThemes = []string{}
+	}
+
+	return &SemanticAskResponse{
+		Entries:   topEntries,
+		Answer:    answer,
+		TopThemes: topThemes,
+	}, nil
+}
+
+// =============================================================================
+// Quick Entry — POST /journals/quick
+// =============================================================================
+
+// validQuickTypes lists accepted entry type values.
+var validQuickTypes = map[string]bool{
+	EntryTypeGratitude: true,
+	EntryTypeBullet:    true,
+	EntryTypeWord:      true,
+}
+
+// CreateQuickEntry formats and saves a structured quick entry as a JournalEntry.
+func (s *JournalService) CreateQuickEntry(appID string, userID uuid.UUID, req QuickEntryRequest) (*JournalEntry, error) {
+	entryType := req.Type
+	if !validQuickTypes[entryType] {
+		return nil, fmt.Errorf("invalid entry type: must be gratitude, bullet, or word")
+	}
+	if len(req.Items) == 0 {
+		return nil, fmt.Errorf("items must not be empty")
+	}
+	if len(req.Items) > 50 {
+		return nil, fmt.Errorf("items must not exceed 50 entries")
+	}
+
+	// Validate each item.
+	for i, item := range req.Items {
+		if len(item) > 1000 {
+			req.Items[i] = item[:1000]
+		}
+	}
+
+	// Format content based on type.
+	var content string
+	switch entryType {
+	case EntryTypeGratitude:
+		var sb strings.Builder
+		sb.WriteString("Today I'm grateful for:\n")
+		for _, item := range req.Items {
+			sb.WriteString("- " + strings.TrimSpace(item) + "\n")
+		}
+		content = strings.TrimRight(sb.String(), "\n")
+	case EntryTypeBullet:
+		var sb strings.Builder
+		for _, item := range req.Items {
+			sb.WriteString("• " + strings.TrimSpace(item) + "\n")
+		}
+		content = strings.TrimRight(sb.String(), "\n")
+	case EntryTypeWord:
+		content = strings.Join(req.Items, " | ")
+	}
+
+	moodEmoji := req.Mood
+	if !isValidMoodEmoji(moodEmoji) {
+		moodEmoji = "😊"
+	}
+	moodScore := req.MoodScore
+	if moodScore < 1 || moodScore > 100 {
+		moodScore = 50
+	}
+	cardColor := req.CardColor
+	if cardColor == "" {
+		cardColor = "#dbeafe"
+	}
+	if !isValidCardColor(cardColor) {
+		cardColor = "#dbeafe"
+	}
+
+	// Parse entry date.
+	entryDate := time.Now().UTC()
+	if req.EntryDate != "" {
+		if parsed, err := time.Parse("2006-01-02", req.EntryDate); err == nil {
+			now := time.Now().UTC()
+			if parsed.After(now.AddDate(0, 0, -7)) && parsed.Before(now.AddDate(0, 0, 2)) {
+				entryDate = parsed
+			}
+		}
+	}
+
+	entry := JournalEntry{
+		ID:        uuid.New(),
+		AppID:     appID,
+		UserID:    userID,
+		MoodEmoji: moodEmoji,
+		MoodScore: moodScore,
+		Content:   content,
+		CardColor: cardColor,
+		EntryDate: entryDate,
+		IsPrivate: true,
+		EntryType: entryType,
+	}
+
+	if err := s.db.Create(&entry).Error; err != nil {
+		return nil, err
+	}
+
+	// Best-effort streak update.
+	_ = s.UpdateStreak(appID, userID)
+
+	// Fire async emotion analysis.
+	s.analyzeEmotionAsync(appID, entry.ID.String(), entry.Content)
+
+	// Fire async embedding generation.
+	s.storeEmbeddingAsync(appID, userID, entry.ID, entry.Content)
+
+	return &entry, nil
+}
+
+// =============================================================================
+// Export — GET /journals/export?format=csv|json
+// =============================================================================
+
+// ExportJournals returns all journal entries for a user in the requested format.
+// format: "csv" returns a CSV byte slice; anything else returns the entries as JSON.
+func (s *JournalService) ExportJournals(appID string, userID uuid.UUID, format string) ([]JournalEntry, error) {
+	var entries []JournalEntry
+	if err := s.db.Scopes(tenant.ForTenant(appID)).Where("user_id = ?", userID).
+		Order("entry_date DESC").
+		Limit(10000). // Reasonable export cap.
+		Find(&entries).Error; err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+// =============================================================================
+// On This Day — GET /journals/on-this-day
+// =============================================================================
+
+// GetOnThisDay returns entries from the same calendar day (±2 days window) in prior years.
+func (s *JournalService) GetOnThisDay(appID string, userID uuid.UUID) (*OnThisDayResponse, error) {
+	now := time.Now().UTC()
+	month := int(now.Month())
+	day := now.Day()
+
+	// Day window: current day ±2, clamped within month bounds.
+	dayMin := day - 2
+	dayMax := day + 2
+	if dayMin < 1 {
+		dayMin = 1
+	}
+	if dayMax > 31 {
+		dayMax = 31
+	}
+
+	var entries []JournalEntry
+	// Exclude entries from current year — we want historical lookbacks only.
+	currentYear := now.Year()
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ? AND EXTRACT(YEAR FROM entry_date) < ? AND EXTRACT(MONTH FROM entry_date) = ? AND EXTRACT(DAY FROM entry_date) BETWEEN ? AND ?",
+			userID, currentYear, month, dayMin, dayMax).
+		Order("entry_date DESC").
+		Limit(20).
+		Find(&entries).Error; err != nil {
+		return nil, err
+	}
+
+	result := make([]OnThisDayEntry, 0, len(entries))
+	for _, e := range entries {
+		yearsAgo := currentYear - e.EntryDate.Year()
+		label := "1 year ago"
+		if yearsAgo > 1 {
+			label = fmt.Sprintf("%d years ago", yearsAgo)
+		}
+		result = append(result, OnThisDayEntry{
+			Entry:    e,
+			YearsAgo: yearsAgo,
+			Label:    label,
+		})
+	}
+
+	return &OnThisDayResponse{Entries: result}, nil
 }

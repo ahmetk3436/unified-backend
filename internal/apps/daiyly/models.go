@@ -7,6 +7,14 @@ import (
 	"gorm.io/gorm"
 )
 
+// Valid entry_type values.
+const (
+	EntryTypeStandard  = "standard"
+	EntryTypeGratitude = "gratitude"
+	EntryTypeBullet    = "bullet"
+	EntryTypeWord      = "word"
+)
+
 type JournalEntry struct {
 	ID        uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
 	AppID     string         `gorm:"size:50;not null;index" json:"app_id"`
@@ -20,12 +28,28 @@ type JournalEntry struct {
 	CardColor          string         `gorm:"type:varchar(7)" json:"card_color"`
 	EntryDate          time.Time      `gorm:"index" json:"entry_date"`
 	IsPrivate          bool           `gorm:"default:true" json:"is_private"`
+	EntryType          string         `gorm:"type:varchar(20);default:'standard'" json:"entry_type"`
 	DetectedEmotion    string         `gorm:"column:detected_emotion;default:''" json:"detected_emotion"`
 	EmotionScores      *string        `gorm:"column:emotion_scores;type:jsonb" json:"emotion_scores,omitempty"`
 	EmotionAnalyzedAt  *time.Time     `gorm:"column:emotion_analyzed_at" json:"emotion_analyzed_at,omitempty"`
 	CreatedAt          time.Time      `json:"created_at"`
 	UpdatedAt          time.Time      `json:"updated_at"`
 	DeletedAt          gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// JournalEmbedding stores the OpenAI text-embedding-3-small vector for a journal entry.
+// When pgvector is unavailable, the embedding is stored as a JSON float array in embedding_json.
+// The pgvector column is managed outside GORM (raw SQL migration) because gorm doesn't support
+// the vector type natively. This struct is used only for embedding_json fallback storage.
+type JournalEmbedding struct {
+	ID            uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	AppID         string         `gorm:"size:50;not null;index" json:"app_id"`
+	UserID        uuid.UUID      `gorm:"type:uuid;index" json:"user_id"`
+	EntryID       uuid.UUID      `gorm:"type:uuid;uniqueIndex" json:"entry_id"`
+	EmbeddingJSON string         `gorm:"type:text" json:"embedding_json"` // JSON float64 array, 1536 dims
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 type JournalStreak struct {
@@ -306,12 +330,56 @@ type AISearchResponse struct {
 }
 
 // AskJournalRequest is the request body for POST /journals/ask.
+// Supports both old shape (question) and new shape (query+days+limit).
 type AskJournalRequest struct {
-	Question string `json:"question"`
+	Question string `json:"question"` // legacy field
+	Query    string `json:"query"`    // new semantic ask field
+	Days     int    `json:"days"`
+	Limit    int    `json:"limit"`
 }
 
-// AskJournalResponse is returned by POST /journals/ask.
+// AskJournalResponse is returned by POST /journals/ask (legacy shape).
 type AskJournalResponse struct {
 	Answer          string   `json:"answer"`
 	ReferencedDates []string `json:"referenced_dates"`
+}
+
+// SemanticAskResponse is returned by POST /journals/ask when using the new semantic shape.
+type SemanticAskResponse struct {
+	Entries   []JournalEntry `json:"entries"`
+	Answer    string         `json:"answer"`
+	TopThemes []string       `json:"top_themes"`
+}
+
+// QuickEntryRequest is the request body for POST /journals/quick.
+type QuickEntryRequest struct {
+	Type      string   `json:"type"`  // "gratitude" | "bullet" | "word"
+	Items     []string `json:"items"` // the content items
+	Mood      string   `json:"mood"`  // mood emoji
+	MoodScore int      `json:"mood_score"`
+	CardColor string   `json:"card_color"`
+	EntryDate string   `json:"entry_date"` // "YYYY-MM-DD" optional
+}
+
+// OnThisDayResponse is returned by GET /journals/on-this-day.
+type OnThisDayResponse struct {
+	Entries []OnThisDayEntry `json:"entries"`
+}
+
+// OnThisDayEntry wraps a journal entry with a human-readable "years ago" label.
+type OnThisDayEntry struct {
+	Entry    JournalEntry `json:"entry"`
+	YearsAgo int          `json:"years_ago"`
+	Label    string       `json:"label"` // e.g. "1 year ago", "3 years ago"
+}
+
+// ExportEntry is a flat CSV-friendly struct used for the CSV export.
+type ExportEntry struct {
+	Date      string
+	Mood      string
+	Title     string
+	Content   string
+	Tags      string
+	Sentiment string
+	EntryType string
 }
