@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"crypto/subtle"
 	"strings"
 
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/config"
@@ -21,9 +22,10 @@ func AdminRequired(db *gorm.DB, cfg *config.Config) fiber.Handler {
 	adminUserIDs := parseCSV(cfg.AdminUserIDs)
 
 	return func(c *fiber.Ctx) error {
-		// Check admin token header
+		// Check admin token header (timing-safe comparison)
 		if cfg.AdminToken != "" {
-			if c.Get("X-Admin-Token") == cfg.AdminToken {
+			headerToken := c.Get("X-Admin-Token")
+			if headerToken != "" && subtle.ConstantTimeCompare([]byte(headerToken), []byte(cfg.AdminToken)) == 1 {
 				return c.Next()
 			}
 		}
