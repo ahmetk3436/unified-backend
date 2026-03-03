@@ -11,22 +11,9 @@ import (
 	sentryfiber "github.com/getsentry/sentry-go/fiber"
 
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps"
-	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/aurascan"
-	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/confessit"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/daiyly"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/driftoff"
-	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/ecomonitor"
-	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/eracheck"
-	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/feelsy"
-	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/mewify"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/moodpulse"
-	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/moodtracker"
-	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/paletteai"
-	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/rizzcheck"
-	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/snapstreak"
-	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/streakkeeper"
-	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/vibecheck"
-	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/wouldyou"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/config"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/database"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/handlers"
@@ -96,24 +83,11 @@ func main() {
 	subscriptionService := services.NewSubscriptionService(database.DB)
 	moderationService := services.NewModerationService(database.DB)
 
-	// Register plugins (all 14 apps)
+	// Register plugins (3 active apps — archived apps removed to reduce attack surface)
 	plugins := []apps.Plugin{
-		aurascan.New(),
-		confessit.New(),
 		daiyly.New(),
 		driftoff.New(),
-		ecomonitor.New(),
-		eracheck.New(moderationService),
-		feelsy.New(moderationService),
-		mewify.New(),
 		moodpulse.New(),
-		moodtracker.New(),
-		paletteai.New(),
-		rizzcheck.New(),
-		snapstreak.New(),
-		streakkeeper.New(),
-		vibecheck.New(),
-		wouldyou.New(),
 	}
 
 	// Migrate plugin models

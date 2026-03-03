@@ -1,8 +1,11 @@
 package daiyly
 
 import (
+	"time"
+
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/config"
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"gorm.io/gorm"
 )
 
@@ -29,6 +32,48 @@ func (p *DaiylyPlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *con
 	svc := NewJournalService(db, cfg.GLMAPIKey, cfg.GLMAPIURL, cfg.GLMModel, cfg.AITimeout)
 	handler := NewJournalHandler(svc)
 
+	// Per-user rate limiter for AI-backed endpoints. Keyed on JWT token prefix so each
+	// authenticated user gets their own bucket — prevents a single user from exhausting
+	// AI compute quota or running up unbounded GLM costs.
+	// weekly-report and notification-config: 5 per hour (heavy AI, some have ?refresh bypass)
+	// prompts and per-entry analyze: 10 per hour (lighter, but still AI-backed)
+	aiHeavyLimiter := limiter.New(limiter.Config{
+		Max:               5,
+		Expiration:        1 * time.Hour,
+		LimiterMiddleware: limiter.SlidingWindow{},
+		KeyGenerator: func(c *fiber.Ctx) string {
+			auth := c.Get("Authorization")
+			if len(auth) > 39 { // "Bearer " (7) + 32 chars minimum
+				return "ai_heavy:" + auth[7:39]
+			}
+			return "ai_heavy:ip:" + c.IP()
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+				"error":   true,
+				"message": "AI rate limit exceeded. Please try again in an hour.",
+			})
+		},
+	})
+	aiLightLimiter := limiter.New(limiter.Config{
+		Max:               10,
+		Expiration:        1 * time.Hour,
+		LimiterMiddleware: limiter.SlidingWindow{},
+		KeyGenerator: func(c *fiber.Ctx) string {
+			auth := c.Get("Authorization")
+			if len(auth) > 39 {
+				return "ai_light:" + auth[7:39]
+			}
+			return "ai_light:ip:" + c.IP()
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+				"error":   true,
+				"message": "AI rate limit exceeded. Please try again in an hour.",
+			})
+		},
+	})
+
 	// Journal CRUD routes
 	router.Post("/journals", handler.Create)
 	router.Get("/journals", handler.List)
@@ -37,15 +82,15 @@ func (p *DaiylyPlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *con
 	router.Get("/journals/insights", handler.GetWeeklyInsights)
 
 	// AI routes (MUST come before :id catch-all)
-	router.Get("/journals/prompts", handler.GetPrompts)
-	router.Get("/journals/weekly-report", handler.GetWeeklyReport)
+	router.Get("/journals/prompts", aiLightLimiter, handler.GetPrompts)
+	router.Get("/journals/weekly-report", aiHeavyLimiter, handler.GetWeeklyReport)
 	router.Get("/journals/flashbacks", handler.GetFlashbacks)
-	router.Get("/journals/notification-config", handler.GetNotificationConfig)
+	router.Get("/journals/notification-config", aiHeavyLimiter, handler.GetNotificationConfig)
 
 	// Parameterized routes (MUST be last)
 	router.Get("/journals/:id", handler.Get)
 	router.Put("/journals/:id", handler.Update)
 	router.Delete("/journals/:id", handler.Delete)
-	router.Post("/journals/:id/analyze", handler.AnalyzeEntry)
+	router.Post("/journals/:id/analyze", aiLightLimiter, handler.AnalyzeEntry)
 	router.Get("/journals/:id/analysis", handler.GetEntryAnalysis)
 }

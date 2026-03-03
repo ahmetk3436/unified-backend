@@ -142,7 +142,28 @@ func Setup(
 	api.Delete("/auth/account", middleware.JWTProtected(cfg), deleteAccountLimiter, authHandler.DeleteAccount)
 
 	// Moderation — user endpoints (protected)
-	api.Post("/reports", middleware.JWTProtected(cfg), moderationHandler.CreateReport)
+	// Per-user report limiter (5/hour). The global 60 req/min per-IP is insufficient;
+	// a single authenticated user could spam 60 reports before it triggers. Keyed on
+	// JWT token prefix so each user gets their own bucket.
+	reportLimiter := limiter.New(limiter.Config{
+		Max:               5,
+		Expiration:        1 * time.Hour,
+		LimiterMiddleware: limiter.SlidingWindow{},
+		KeyGenerator: func(c *fiber.Ctx) string {
+			auth := c.Get("Authorization")
+			if len(auth) > 39 { // "Bearer " (7) + 32 chars minimum
+				return "report:" + auth[7:39]
+			}
+			return "report:ip:" + c.IP()
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+				"error":   true,
+				"message": "Too many reports submitted. Please try again later.",
+			})
+		},
+	})
+	api.Post("/reports", middleware.JWTProtected(cfg), reportLimiter, moderationHandler.CreateReport)
 	api.Post("/blocks", middleware.JWTProtected(cfg), moderationHandler.BlockUser)
 	api.Delete("/blocks/:id", middleware.JWTProtected(cfg), moderationHandler.UnblockUser)
 

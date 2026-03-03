@@ -577,7 +577,7 @@ func (s *JournalService) analyzeEntryAsync(appID string, userID, entryID uuid.UU
 	}()
 
 	var entry JournalEntry
-	if err := s.db.First(&entry, "id = ?", entryID).Error; err != nil {
+	if err := s.db.Scopes(tenant.ForTenant(appID)).First(&entry, "id = ? AND user_id = ?", entryID, userID).Error; err != nil {
 		return
 	}
 
@@ -667,8 +667,10 @@ func (s *JournalService) GetEntryAnalysis(appID string, userID, entryID uuid.UUI
 }
 
 func (s *JournalService) TriggerAnalysis(appID string, userID, entryID uuid.UUID) error {
-	// Delete existing analysis if any, then re-analyze
-	s.db.Where("entry_id = ?", entryID).Delete(&EntryAnalysis{})
+	// Delete existing analysis only if it belongs to this user in this app.
+	// Scoping by user_id + app_id prevents a crafted entryID from deleting
+	// another user's analysis even if the caller somehow bypassed ownership checks.
+	s.db.Where("entry_id = ? AND user_id = ? AND app_id = ?", entryID, userID, appID).Delete(&EntryAnalysis{})
 	go s.analyzeEntryAsync(appID, userID, entryID)
 	return nil
 }

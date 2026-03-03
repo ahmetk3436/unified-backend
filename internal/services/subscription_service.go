@@ -26,18 +26,24 @@ func (s *SubscriptionService) HandleWebhookEvent(appID string, event *dto.Revenu
 	// and a retried CANCELLATION could incorrectly cancel an active subscriber who re-subscribed.
 	// We use event.ID as a unique key and INSERT ... ON CONFLICT DO NOTHING so only the first
 	// delivery wins — atomically, at the DB level.
-	if event.ID != "" {
-		result := s.db.Exec(
-			`INSERT INTO processed_webhook_events (event_id, processed_at) VALUES (?, ?) ON CONFLICT (event_id) DO NOTHING`,
-			event.ID, time.Now().UTC(),
-		)
-		if result.Error != nil {
-			return fmt.Errorf("webhook idempotency check failed: %w", result.Error)
-		}
-		if result.RowsAffected == 0 {
-			slog.Info("duplicate webhook event skipped", "event_id", event.ID, "type", event.Type)
-			return nil
-		}
+	//
+	// Reject events without an ID entirely. Legitimate RevenueCat events always have an ID;
+	// a missing ID bypasses the idempotency guard, which could allow a double-spend attack
+	// (two identical payloads with event.ID="" both create subscription rows).
+	if event.ID == "" {
+		slog.Warn("webhook event missing required ID field — rejected", "type", event.Type, "app", appID)
+		return fmt.Errorf("webhook event missing required ID field")
+	}
+	result := s.db.Exec(
+		`INSERT INTO processed_webhook_events (event_id, processed_at) VALUES (?, ?) ON CONFLICT (event_id) DO NOTHING`,
+		event.ID, time.Now().UTC(),
+	)
+	if result.Error != nil {
+		return fmt.Errorf("webhook idempotency check failed: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		slog.Info("duplicate webhook event skipped", "event_id", event.ID, "type", event.Type)
+		return nil
 	}
 
 	switch event.Type {
