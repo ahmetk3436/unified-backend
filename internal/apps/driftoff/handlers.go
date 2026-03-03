@@ -45,8 +45,14 @@ func (h *SleepHandler) List(c *fiber.Ctx) error {
 
 	limit, _ := strconv.Atoi(c.Query("limit", "20"))
 	offset, _ := strconv.Atoi(c.Query("offset", "0"))
+	if limit < 1 {
+		limit = 1
+	}
 	if limit > 100 {
 		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
 	}
 
 	resp, err := h.svc.List(appID, userID, limit, offset)
@@ -164,6 +170,9 @@ func (h *SleepHandler) GetStats(c *fiber.Ctx) error {
 	}
 
 	days, _ := strconv.Atoi(c.Query("days", "7"))
+	if days < 1 {
+		days = 1
+	}
 	if days > 90 {
 		days = 90
 	}

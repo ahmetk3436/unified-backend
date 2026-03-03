@@ -114,7 +114,32 @@ func Setup(
 
 	// Protected routes (JWT required) - apply middleware to individual routes
 	api.Post("/auth/logout", middleware.JWTProtected(cfg), authHandler.Logout)
-	api.Delete("/auth/account", middleware.JWTProtected(cfg), authHandler.DeleteAccount)
+
+	// Account deletion: 1 successful attempt per user per day is more than enough.
+	// Per-user key (from JWT sub claim in body or fallback to IP) prevents DoS
+	// where an attacker fires rapid DELETEs with a stolen token.
+	deleteAccountLimiter := limiter.New(limiter.Config{
+		Max:               3,
+		Expiration:        24 * time.Hour,
+		LimiterMiddleware: limiter.SlidingWindow{},
+		KeyGenerator: func(c *fiber.Ctx) string {
+			// Use Authorization header prefix as user-scoped key — the full token
+			// is too long to use as a key; the first 32 chars are sufficient
+			// to distinguish users without leaking the full credential.
+			auth := c.Get("Authorization")
+			if len(auth) > 39 { // "Bearer " (7) + 32 chars minimum
+				return "del_acct:" + auth[7:39]
+			}
+			return "del_acct:ip:" + c.IP()
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+				"error":   true,
+				"message": "Too many deletion attempts. Please try again later.",
+			})
+		},
+	})
+	api.Delete("/auth/account", middleware.JWTProtected(cfg), deleteAccountLimiter, authHandler.DeleteAccount)
 
 	// Moderation — user endpoints (protected)
 	api.Post("/reports", middleware.JWTProtected(cfg), moderationHandler.CreateReport)

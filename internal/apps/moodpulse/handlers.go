@@ -47,8 +47,14 @@ func (h *MoodHandler) List(c *fiber.Ctx) error {
 	offset, _ := strconv.Atoi(c.Query("offset", "0"))
 	month, _ := strconv.Atoi(c.Query("month", "0"))
 	year, _ := strconv.Atoi(c.Query("year", "0"))
+	if limit < 1 {
+		limit = 1
+	}
 	if limit > 100 {
 		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
 	}
 
 	resp, err := h.svc.List(appID, userID, limit, offset, month, year)
@@ -133,6 +139,13 @@ func (h *MoodHandler) BatchCreate(c *fiber.Ctx) error {
 	var req BatchCreateMoodRequest
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
+	}
+
+	if len(req.Entries) == 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "no entries provided")
+	}
+	if len(req.Entries) > 500 {
+		return fiber.NewError(fiber.StatusBadRequest, "max 500 entries per batch")
 	}
 
 	resp, err := h.svc.BatchCreate(appID, userID, req)
@@ -230,6 +243,9 @@ func (h *MoodHandler) GetStats(c *fiber.Ctx) error {
 	}
 
 	days, _ := strconv.Atoi(c.Query("days", "7"))
+	if days < 1 {
+		days = 1
+	}
 	if days > 90 {
 		days = 90
 	}
