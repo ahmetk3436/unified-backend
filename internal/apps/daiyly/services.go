@@ -22,6 +22,7 @@ var (
 	ErrInvalidMoodScore     = errors.New("mood score must be between 1 and 100")
 	ErrInvalidCardColor     = errors.New("invalid card color")
 	ErrInvalidPhotoURL      = errors.New("photo_url must be an https:// URL of at most 2048 characters")
+	ErrInvalidAudioURL      = errors.New("audio_url must be an https:// URL of at most 2048 characters")
 	ErrJournalNotFound      = errors.New("journal entry not found")
 	ErrNotOwner             = errors.New("you do not own this journal entry")
 	ErrContentInappropriate = errors.New("content contains inappropriate language")
@@ -51,15 +52,17 @@ func (f *ContentFilterService) FilterContent(content string) (bool, string) {
 }
 
 type JournalService struct {
-	db            *gorm.DB
-	contentFilter *ContentFilterService
-	aiAPIKey      string
-	aiAPIURL      string
-	aiModel       string
-	aiTimeout     time.Duration
+	db             *gorm.DB
+	contentFilter  *ContentFilterService
+	aiAPIKey       string
+	aiAPIURL       string
+	aiModel        string
+	aiTimeout      time.Duration
+	openAIAPIKey   string
+	openAIModel    string
 }
 
-func NewJournalService(db *gorm.DB, aiAPIKey, aiAPIURL, aiModel string, aiTimeout time.Duration) *JournalService {
+func NewJournalService(db *gorm.DB, aiAPIKey, aiAPIURL, aiModel string, aiTimeout time.Duration, openAIAPIKey, openAIModel string) *JournalService {
 	if aiAPIURL == "" {
 		aiAPIURL = "https://api.z.ai/api/paas/v4/chat/completions"
 	}
@@ -69,7 +72,18 @@ func NewJournalService(db *gorm.DB, aiAPIKey, aiAPIURL, aiModel string, aiTimeou
 	if aiTimeout == 0 {
 		aiTimeout = 60 * time.Second
 	}
-	return &JournalService{db: db, aiAPIKey: aiAPIKey, aiAPIURL: aiAPIURL, aiModel: aiModel, aiTimeout: aiTimeout}
+	if openAIModel == "" {
+		openAIModel = "gpt-4o-mini"
+	}
+	return &JournalService{
+		db:           db,
+		aiAPIKey:     aiAPIKey,
+		aiAPIURL:     aiAPIURL,
+		aiModel:      aiModel,
+		aiTimeout:    aiTimeout,
+		openAIAPIKey: openAIAPIKey,
+		openAIModel:  openAIModel,
+	}
 }
 
 func (s *JournalService) CreateEntry(appID string, userID uuid.UUID, req CreateJournalRequest) (*JournalEntry, error) {
@@ -117,17 +131,27 @@ func (s *JournalService) CreateEntry(appID string, userID uuid.UUID, req CreateJ
 		return nil, ErrInvalidPhotoURL
 	}
 
+	if !isValidPhotoURL(req.AudioURL) {
+		return nil, ErrInvalidAudioURL
+	}
+
+	if len(req.Transcript) > 50000 {
+		return nil, errors.New("transcript too long (max 50000 characters)")
+	}
+
 	entry := JournalEntry{
-		ID:        uuid.New(),
-		AppID:     appID,
-		UserID:    userID,
-		MoodEmoji: req.MoodEmoji,
-		MoodScore: req.MoodScore,
-		Content:   req.Content,
-		PhotoURL:  req.PhotoURL,
-		CardColor: req.CardColor,
-		EntryDate: entryDate,
-		IsPrivate: req.IsPrivate,
+		ID:         uuid.New(),
+		AppID:      appID,
+		UserID:     userID,
+		MoodEmoji:  req.MoodEmoji,
+		MoodScore:  req.MoodScore,
+		Content:    req.Content,
+		PhotoURL:   req.PhotoURL,
+		AudioURL:   req.AudioURL,
+		Transcript: req.Transcript,
+		CardColor:  req.CardColor,
+		EntryDate:  entryDate,
+		IsPrivate:  req.IsPrivate,
 	}
 
 	if err := s.db.Create(&entry).Error; err != nil {
@@ -276,6 +300,20 @@ func (s *JournalService) UpdateEntry(appID string, userID uuid.UUID, entryID uui
 		entry.PhotoURL = *req.PhotoURL
 	}
 
+	if req.AudioURL != nil {
+		if !isValidPhotoURL(*req.AudioURL) {
+			return nil, ErrInvalidAudioURL
+		}
+		entry.AudioURL = *req.AudioURL
+	}
+
+	if req.Transcript != nil {
+		if len(*req.Transcript) > 50000 {
+			return nil, errors.New("transcript too long (max 50000 characters)")
+		}
+		entry.Transcript = *req.Transcript
+	}
+
 	if req.CardColor != nil {
 		if !isValidCardColor(*req.CardColor) {
 			return nil, ErrInvalidCardColor
@@ -335,15 +373,41 @@ func (s *JournalService) UpdateStreak(appID string, userID uuid.UUID) error {
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	lastEntry := streak.LastEntryDate.UTC().Truncate(24 * time.Hour)
 
+	// Already journaled today — nothing to do.
 	if today.Equal(lastEntry) {
 		return nil
 	}
 
 	yesterday := today.AddDate(0, 0, -1)
+	twoDaysAgo := today.AddDate(0, 0, -2)
+
 	if lastEntry.Equal(yesterday) {
+		// Consecutive day — extend streak normally.
+		// If grace was active it is now consumed; clear it.
 		streak.CurrentStreak++
+		streak.GracePeriodActive = false
+	} else if lastEntry.Equal(twoDaysAgo) && streak.CurrentStreak >= 7 {
+		// User missed exactly one day and has a streak of 7+.
+		// Grant grace period if they haven't used one in the last 7 days.
+		graceAllowed := streak.GracePeriodUsedAt == nil ||
+			time.Since(*streak.GracePeriodUsedAt) >= 7*24*time.Hour
+
+		if graceAllowed {
+			// Keep streak alive; mark grace active so the client can show a warning.
+			streak.GracePeriodActive = true
+			now := time.Now().UTC()
+			streak.GracePeriodUsedAt = &now
+			// Do NOT increment CurrentStreak — the user hasn't journaled yet today.
+			// Increment TotalEntries below still happens because they ARE journaling now.
+		} else {
+			// Grace already used within 7 days — reset streak.
+			streak.CurrentStreak = 1
+			streak.GracePeriodActive = false
+		}
 	} else {
+		// Gap is 3+ days or streak < 3: reset.
 		streak.CurrentStreak = 1
+		streak.GracePeriodActive = false
 	}
 
 	if streak.CurrentStreak > streak.LongestStreak {
@@ -592,6 +656,65 @@ func (s *JournalService) callOpenAI(systemPrompt, userPrompt string) (string, er
 
 	content := strings.TrimSpace(chatResp.Choices[0].Message.Content)
 	// Strip markdown code fences if present
+	if strings.HasPrefix(content, "```") {
+		lines := strings.Split(content, "\n")
+		if len(lines) > 2 {
+			content = strings.Join(lines[1:len(lines)-1], "\n")
+		}
+	}
+
+	return content, nil
+}
+
+// callOpenAIChat calls the native OpenAI chat completions endpoint using s.openAIAPIKey and s.openAIModel.
+// Falls back to callOpenAI (GLM) when openAIAPIKey is not configured.
+func (s *JournalService) callOpenAIChat(systemPrompt, userPrompt string) (string, error) {
+	if s.openAIAPIKey == "" {
+		// Fallback: use the GLM-compatible endpoint.
+		return s.callOpenAI(systemPrompt, userPrompt)
+	}
+
+	reqBody := openAIChatRequest{
+		Model: s.openAIModel,
+		Messages: []openAIMessage{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userPrompt},
+		},
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+s.openAIAPIKey)
+
+	client := &http.Client{Timeout: s.aiTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("openai chat request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("openai chat returned status %d", resp.StatusCode)
+	}
+
+	var chatResp openAIChatResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&chatResp); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
+	if len(chatResp.Choices) == 0 {
+		return "", fmt.Errorf("no choices in response")
+	}
+
+	content := strings.TrimSpace(chatResp.Choices[0].Message.Content)
+	// Strip markdown code fences if present.
 	if strings.HasPrefix(content, "```") {
 		lines := strings.Split(content, "\n")
 		if len(lines) > 2 {
@@ -1146,5 +1269,703 @@ Rules:
 		SuggestedMinute: suggestedMinute,
 		DailyMessages:   parsed.Daily,
 		StreakMessages:   parsed.Streak,
+	}, nil
+}
+
+// --- B1: Therapist Export ---
+
+// TherapistExport returns an AI-generated, therapist-ready summary of the user's last 30 days.
+// Result is cached for 6 hours per user. This is a PREMIUM feature — subscription gating
+// should be enforced at the handler level once RevenueCat entitlement checks are wired up.
+func (s *JournalService) TherapistExport(appID string, userID uuid.UUID) (*TherapistExportResponse, error) {
+	now := time.Now().UTC()
+
+	// Check 6-hour cache.
+	var cached TherapistExportCache
+	cacheErr := s.db.Where("app_id = ? AND user_id = ?", appID, userID).First(&cached).Error
+	if cacheErr == nil && now.Sub(cached.GeneratedAt) < 6*time.Hour {
+		var report TherapistExportResponse
+		if err := json.Unmarshal([]byte(cached.ReportJSON), &report); err == nil {
+			return &report, nil
+		}
+	}
+
+	// Fetch last 30 days of entries.
+	thirtyDaysAgo := now.AddDate(0, 0, -30)
+	var entries []JournalEntry
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ? AND entry_date >= ?", userID, thirtyDaysAgo).
+		Order("entry_date ASC").
+		Find(&entries).Error; err != nil {
+		return nil, err
+	}
+
+	entryCount := len(entries)
+	periodLabel := thirtyDaysAgo.Format("Jan 2") + " – " + now.Format("Jan 2, 2006")
+
+	if entryCount == 0 {
+		return &TherapistExportResponse{
+			Period:            periodLabel,
+			EntryCount:        0,
+			AvgMoodScore:      0,
+			MoodTrend:         "no_data",
+			DominantThemes:    []string{},
+			EmotionalPatterns: "No entries in the last 30 days.",
+			NotableEntries:    []NotableEntry{},
+			AINarrative:       "No journal entries were found for this period.",
+			Suggestions:       "Start journaling to generate a therapist-ready summary.",
+			GeneratedAt:       now.Format(time.RFC3339),
+		}, nil
+	}
+
+	// Compute basic stats.
+	totalScore := 0
+	for _, e := range entries {
+		totalScore += e.MoodScore
+	}
+	avgScore := totalScore / entryCount
+
+	// Mood trend: compare first half vs second half.
+	moodTrend := "stable"
+	if entryCount >= 2 {
+		mid := entryCount / 2
+		firstSum, secondSum := 0, 0
+		for i := 0; i < mid; i++ {
+			firstSum += entries[i].MoodScore
+		}
+		for i := mid; i < entryCount; i++ {
+			secondSum += entries[i].MoodScore
+		}
+		firstAvg := firstSum / mid
+		secondAvg := secondSum / (entryCount - mid)
+		diff := secondAvg - firstAvg
+		switch {
+		case diff > 10:
+			moodTrend = "improving"
+		case diff > 3:
+			moodTrend = "slightly_improving"
+		case diff < -10:
+			moodTrend = "declining"
+		case diff < -3:
+			moodTrend = "slightly_declining"
+		}
+	}
+
+	// Select notable entries: highest and lowest mood score entries.
+	notableEntries := buildNotableEntries(entries)
+
+	// If no AI key, return a stats-only response without narrative.
+	if s.aiAPIKey == "" {
+		return &TherapistExportResponse{
+			Period:            periodLabel,
+			EntryCount:        entryCount,
+			AvgMoodScore:      avgScore,
+			MoodTrend:         moodTrend,
+			DominantThemes:    []string{},
+			EmotionalPatterns: "",
+			NotableEntries:    notableEntries,
+			AINarrative:       fmt.Sprintf("This month you wrote %d entries with an average mood score of %d/100.", entryCount, avgScore),
+			Suggestions:       "Continue journaling to build deeper insights over time.",
+			GeneratedAt:       now.Format(time.RFC3339),
+		}, nil
+	}
+
+	// Build entry summaries for the AI (truncated to 500 chars per entry for security).
+	var summary strings.Builder
+	for _, e := range entries {
+		preview := e.Content
+		if len(preview) > 500 {
+			preview = preview[:500] + "..."
+		}
+		summary.WriteString(fmt.Sprintf("- %s %s (score:%d): %s\n",
+			e.EntryDate.Format("2006-01-02"), e.MoodEmoji, e.MoodScore, preview))
+	}
+
+	systemPrompt := `You are a clinical-grade journal analyst preparing a therapist briefing. Analyze the provided journal entries and respond with JSON only (no markdown, no code fences):
+{"dominant_themes":["theme1","theme2","theme3"],"emotional_patterns":"2-3 sentences describing recurring emotional patterns","ai_narrative":"3-5 sentence warm summary the user can share with their therapist","suggestions":"1-2 concrete suggestions for the therapist to explore"}
+
+Rules:
+- dominant_themes: 2-5 most recurring topics (e.g. "work stress", "gratitude", "family", "sleep issues")
+- emotional_patterns: clinical but empathetic; describe patterns by day/context if visible (e.g. "anxiety appears most on Mondays")
+- ai_narrative: addressed to the user ("This month you..."); warm, non-judgmental; max 5000 chars total response
+- suggestions: professional, specific, actionable for a therapist session
+- Never diagnose or use clinical disorder labels`
+
+	statsContext := fmt.Sprintf(
+		"Period: %s\nEntry count: %d\nAvg mood: %d/100\nTrend: %s\n\nEntries (chronological):\n%s",
+		periodLabel, entryCount, avgScore, moodTrend, summary.String(),
+	)
+
+	aiContent, err := s.callOpenAIChat(systemPrompt, statsContext)
+	if err != nil {
+		slog.Warn("[daiyly] therapist export AI call failed", "user", userID, "error", err)
+		return &TherapistExportResponse{
+			Period:            periodLabel,
+			EntryCount:        entryCount,
+			AvgMoodScore:      avgScore,
+			MoodTrend:         moodTrend,
+			DominantThemes:    []string{},
+			EmotionalPatterns: "",
+			NotableEntries:    notableEntries,
+			AINarrative:       fmt.Sprintf("This month you wrote %d entries with an average mood score of %d/100.", entryCount, avgScore),
+			Suggestions:       "Continue journaling to build deeper insights over time.",
+			GeneratedAt:       now.Format(time.RFC3339),
+		}, nil
+	}
+
+	// Enforce 5000-char safety cap on raw AI response before unmarshalling.
+	if len(aiContent) > 5000 {
+		aiContent = aiContent[:5000]
+	}
+
+	var parsed struct {
+		DominantThemes    []string `json:"dominant_themes"`
+		EmotionalPatterns string   `json:"emotional_patterns"`
+		AINarrative       string   `json:"ai_narrative"`
+		Suggestions       string   `json:"suggestions"`
+	}
+	if err := json.Unmarshal([]byte(aiContent), &parsed); err != nil {
+		slog.Warn("[daiyly] therapist export JSON parse failed", "user", userID, "error", err)
+		parsed.DominantThemes = []string{}
+		parsed.AINarrative = fmt.Sprintf("This month you wrote %d entries with an average mood score of %d/100.", entryCount, avgScore)
+		parsed.Suggestions = "Continue journaling to build deeper insights over time."
+	}
+
+	if parsed.DominantThemes == nil {
+		parsed.DominantThemes = []string{}
+	}
+
+	report := &TherapistExportResponse{
+		Period:            periodLabel,
+		EntryCount:        entryCount,
+		AvgMoodScore:      avgScore,
+		MoodTrend:         moodTrend,
+		DominantThemes:    parsed.DominantThemes,
+		EmotionalPatterns: parsed.EmotionalPatterns,
+		NotableEntries:    notableEntries,
+		AINarrative:       parsed.AINarrative,
+		Suggestions:       parsed.Suggestions,
+		GeneratedAt:       now.Format(time.RFC3339),
+	}
+
+	// Persist to 6h cache (upsert: delete old + create new).
+	reportJSON, _ := json.Marshal(report)
+	s.db.Where("app_id = ? AND user_id = ?", appID, userID).Delete(&TherapistExportCache{})
+	s.db.Create(&TherapistExportCache{
+		ID:          uuid.New(),
+		AppID:       appID,
+		UserID:      userID,
+		ReportJSON:  string(reportJSON),
+		GeneratedAt: now,
+	})
+
+	return report, nil
+}
+
+// buildNotableEntries selects up to 3 notable entries from the set: the highest-scored,
+// the lowest-scored, and the most recent — deduped by entry ID.
+func buildNotableEntries(entries []JournalEntry) []NotableEntry {
+	if len(entries) == 0 {
+		return []NotableEntry{}
+	}
+
+	// Find highest and lowest by mood score.
+	high, low := entries[0], entries[0]
+	for _, e := range entries[1:] {
+		if e.MoodScore > high.MoodScore {
+			high = e
+		}
+		if e.MoodScore < low.MoodScore {
+			low = e
+		}
+	}
+	most := entries[len(entries)-1] // most recent
+
+	seen := map[uuid.UUID]bool{}
+	var notable []NotableEntry
+	for _, e := range []JournalEntry{high, low, most} {
+		if seen[e.ID] {
+			continue
+		}
+		seen[e.ID] = true
+		excerpt := e.Content
+		if len(excerpt) > 200 {
+			excerpt = excerpt[:200] + "..."
+		}
+		notable = append(notable, NotableEntry{
+			Date:      e.EntryDate.Format("2006-01-02"),
+			Excerpt:   excerpt,
+			MoodScore: e.MoodScore,
+		})
+	}
+	return notable
+}
+
+// --- B3: Smart Notification Timing ---
+
+// GetNotificationTiming analyzes the last 30 days of entries to find the user's typical
+// journaling hour. Returns null optimal_hour and zero confidence when fewer than 5 entries exist.
+func (s *JournalService) GetNotificationTiming(appID string, userID uuid.UUID) (*NotificationTimingResponse, error) {
+	thirtyDaysAgo := time.Now().UTC().AddDate(0, 0, -30)
+
+	var entries []JournalEntry
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ? AND entry_date >= ?", userID, thirtyDaysAgo).
+		Find(&entries).Error; err != nil {
+		return nil, err
+	}
+
+	// Not enough data.
+	if len(entries) < 5 {
+		return &NotificationTimingResponse{
+			OptimalHour:      nil,
+			OptimalHourLabel: "",
+			Confidence:       0,
+			DaysAnalyzed:     len(entries),
+		}, nil
+	}
+
+	// Count entries per hour and track unique journaling days.
+	hourCounts := make(map[int]int)
+	uniqueDays := map[string]bool{}
+	for _, e := range entries {
+		hourCounts[e.CreatedAt.UTC().Hour()]++
+		uniqueDays[e.CreatedAt.UTC().Format("2006-01-02")] = true
+	}
+
+	// Find peak hour.
+	peakHour, peakCount := 0, 0
+	for h, c := range hourCounts {
+		if c > peakCount || (c == peakCount && h > peakHour) {
+			peakHour = h
+			peakCount = c
+		}
+	}
+
+	// Confidence = fraction of days that have an entry in the peak hour.
+	daysAnalyzed := len(uniqueDays)
+	confidence := float64(peakCount) / float64(daysAnalyzed)
+	// Round to 2 decimal places.
+	confidence = float64(int(confidence*100+0.5)) / 100
+
+	// Build human-readable label (12-hour format).
+	label := formatHourLabel(peakHour)
+
+	hour := peakHour
+	return &NotificationTimingResponse{
+		OptimalHour:      &hour,
+		OptimalHourLabel: label,
+		Confidence:       confidence,
+		DaysAnalyzed:     daysAnalyzed,
+	}, nil
+}
+
+// TherapistReport wraps TherapistExport and returns the spec-compatible TherapistReportResponse
+// shape for the GET /journals/therapist-report endpoint.
+func (s *JournalService) TherapistReport(appID string, userID uuid.UUID) (*TherapistReportResponse, error) {
+	now := time.Now().UTC()
+	thirtyDaysAgo := now.AddDate(0, 0, -30)
+
+	export, err := s.TherapistExport(appID, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build a prose report from the rich export for the simpler envelope.
+	var reportParts []string
+	if export.AINarrative != "" {
+		reportParts = append(reportParts, export.AINarrative)
+	}
+	if export.EmotionalPatterns != "" {
+		reportParts = append(reportParts, "\nEmotional Patterns: "+export.EmotionalPatterns)
+	}
+	if len(export.DominantThemes) > 0 {
+		reportParts = append(reportParts, "\nKey Themes: "+strings.Join(export.DominantThemes, ", ")+".")
+	}
+	if export.Suggestions != "" {
+		reportParts = append(reportParts, "\nSuggested Discussion Points: "+export.Suggestions)
+	}
+	report := strings.Join(reportParts, " ")
+	if report == "" {
+		report = fmt.Sprintf("No journal entries found in the last 30 days (from %s to %s).",
+			thirtyDaysAgo.Format("Jan 2, 2006"), now.Format("Jan 2, 2006"))
+	}
+
+	return &TherapistReportResponse{
+		Report:      report,
+		GeneratedAt: export.GeneratedAt,
+		EntryCount:  export.EntryCount,
+		DateRange: TherapistReportDateRange{
+			From: thirtyDaysAgo.Format("2006-01-02"),
+			To:   now.Format("2006-01-02"),
+		},
+	}, nil
+}
+
+// formatHourLabel converts a 0-23 hour integer to a 12-hour AM/PM string (e.g. 21 → "9:00 PM").
+func formatHourLabel(hour int) string {
+	suffix := "AM"
+	h := hour
+	if h == 0 {
+		h = 12
+	} else if h >= 12 {
+		suffix = "PM"
+		if h > 12 {
+			h -= 12
+		}
+	}
+	return fmt.Sprintf("%d:00 %s", h, suffix)
+}
+
+// --- AI Semantic Search & Ask ---
+
+// callOpenAIDirect calls the OpenAI API (not the GLM endpoint) using the service's
+// openAIAPIKey and openAIModel. Used by AISearchEntries and AskJournal.
+func (s *JournalService) callOpenAIDirect(systemPrompt, userPrompt string) (string, error) {
+	if s.openAIAPIKey == "" {
+		return "", fmt.Errorf("openai api key not configured")
+	}
+
+	reqBody := openAIChatRequest{
+		Model: s.openAIModel,
+		Messages: []openAIMessage{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userPrompt},
+		},
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+s.openAIAPIKey)
+
+	client := &http.Client{Timeout: s.aiTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("openai request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("openai returned status %d", resp.StatusCode)
+	}
+
+	var chatResp openAIChatResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&chatResp); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
+	if len(chatResp.Choices) == 0 {
+		return "", fmt.Errorf("no choices in response")
+	}
+
+	content := strings.TrimSpace(chatResp.Choices[0].Message.Content)
+	// Strip markdown code fences if present.
+	if strings.HasPrefix(content, "```") {
+		lines := strings.Split(content, "\n")
+		if len(lines) > 2 {
+			content = strings.Join(lines[1:len(lines)-1], "\n")
+		}
+	}
+
+	return content, nil
+}
+
+// aiSearchStopWords is the minimal set of common English words skipped during keyword
+// pre-filtering. Keeping this small avoids discarding domain-specific terms.
+var aiSearchStopWords = map[string]struct{}{
+	"a": {}, "an": {}, "the": {}, "and": {}, "or": {}, "but": {}, "in": {},
+	"on": {}, "at": {}, "to": {}, "for": {}, "of": {}, "with": {}, "by": {},
+	"from": {}, "is": {}, "was": {}, "are": {}, "were": {}, "be": {}, "been": {},
+	"have": {}, "has": {}, "had": {}, "do": {}, "does": {}, "did": {}, "will": {},
+	"would": {}, "could": {}, "should": {}, "may": {}, "might": {}, "i": {},
+	"me": {}, "my": {}, "we": {}, "our": {}, "you": {}, "your": {}, "he": {},
+	"she": {}, "it": {}, "they": {}, "their": {}, "what": {}, "when": {},
+	"where": {}, "who": {}, "how": {}, "why": {}, "that": {}, "this": {},
+	"about": {}, "last": {}, "month": {}, "week": {}, "year": {}, "day": {},
+	"time": {}, "not": {}, "no": {}, "so": {}, "up": {}, "out": {}, "if": {},
+	"then": {}, "than": {}, "into": {}, "through": {}, "over": {}, "more": {},
+	"just": {}, "also": {}, "some": {}, "all": {}, "any": {}, "most": {},
+}
+
+// extractKeywords splits the query into meaningful words, stripping stop words.
+func extractKeywords(query string) []string {
+	words := strings.Fields(strings.ToLower(query))
+	var keywords []string
+	seen := map[string]struct{}{}
+	for _, w := range words {
+		w = strings.Trim(w, ".,!?;:'\"()-")
+		if len(w) < 2 {
+			continue
+		}
+		if _, stop := aiSearchStopWords[w]; stop {
+			continue
+		}
+		if _, dup := seen[w]; dup {
+			continue
+		}
+		seen[w] = struct{}{}
+		keywords = append(keywords, w)
+	}
+	return keywords
+}
+
+// relevanceExcerpt returns up to 200 chars of content centred on the first keyword match.
+// Falls back to the first 200 chars when no keyword appears.
+func relevanceExcerpt(content string, keywords []string) string {
+	lower := strings.ToLower(content)
+	for _, kw := range keywords {
+		idx := strings.Index(lower, kw)
+		if idx == -1 {
+			continue
+		}
+		start := idx - 40
+		if start < 0 {
+			start = 0
+		}
+		end := start + 200
+		if end > len(content) {
+			end = len(content)
+		}
+		excerpt := strings.TrimSpace(content[start:end])
+		if start > 0 {
+			excerpt = "..." + excerpt
+		}
+		if end < len(content) {
+			excerpt = excerpt + "..."
+		}
+		return excerpt
+	}
+	if len(content) > 200 {
+		return content[:200] + "..."
+	}
+	return content
+}
+
+// AISearchEntries performs a semantic journal search using GPT-4o-mini.
+//
+// Algorithm:
+//  1. Fetch entries from the last `days` days.
+//  2. If ≤ 20 entries: send all to OpenAI.
+//  3. If > 20: keyword pre-filter → top 30 → send to OpenAI.
+//  4. OpenAI returns a JSON array of entry IDs in relevance order.
+//  5. Return those entries with a relevance_excerpt.
+//
+// TODO: enforce per-user daily rate limit (20 req/day) at scale.
+func (s *JournalService) AISearchEntries(appID string, userID uuid.UUID, query string, limit, days int) (*AISearchResponse, error) {
+	if len(query) == 0 {
+		return nil, fmt.Errorf("query is required")
+	}
+	if len(query) > 500 {
+		query = query[:500]
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	if days <= 0 {
+		days = 90
+	}
+	if days > 365 {
+		days = 365
+	}
+
+	since := time.Now().UTC().AddDate(0, 0, -days)
+	var entries []JournalEntry
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ? AND entry_date >= ?", userID, since).
+		Order("entry_date DESC").
+		Limit(500).
+		Find(&entries).Error; err != nil {
+		return nil, fmt.Errorf("fetch entries: %w", err)
+	}
+
+	if len(entries) == 0 {
+		return &AISearchResponse{Query: query, Results: []AISearchResult{}, Total: 0}, nil
+	}
+
+	// Keyword pre-filter when there are more than 20 entries.
+	candidates := entries
+	if len(entries) > 20 {
+		keywords := extractKeywords(query)
+		if len(keywords) > 0 {
+			type scoredEntry struct {
+				entry JournalEntry
+				hits  int
+			}
+			var scored []scoredEntry
+			for _, e := range entries {
+				lower := strings.ToLower(e.Content)
+				hits := 0
+				for _, kw := range keywords {
+					if strings.Contains(lower, kw) {
+						hits++
+					}
+				}
+				if hits > 0 {
+					scored = append(scored, scoredEntry{entry: e, hits: hits})
+				}
+			}
+			sort.Slice(scored, func(i, j int) bool {
+				return scored[i].hits > scored[j].hits
+			})
+			top := 30
+			if len(scored) < top {
+				top = len(scored)
+			}
+			if top == 0 {
+				// No keyword hits — fall back to first 30 by date.
+				if len(entries) > 30 {
+					candidates = entries[:30]
+				}
+			} else {
+				candidates = make([]JournalEntry, top)
+				for i := 0; i < top; i++ {
+					candidates[i] = scored[i].entry
+				}
+			}
+		} else {
+			// No usable keywords — take most recent 30.
+			if len(entries) > 30 {
+				candidates = entries[:30]
+			}
+		}
+	}
+
+	// Build a compact entry list for the AI prompt.
+	var sb strings.Builder
+	entryByID := make(map[string]JournalEntry, len(candidates))
+	for _, e := range candidates {
+		id := e.ID.String()
+		entryByID[id] = e
+		preview := e.Content
+		if len(preview) > 300 {
+			preview = preview[:300] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("ID: %s | Date: %s | MoodScore: %d | Content: %s\n",
+			id, e.EntryDate.Format("2006-01-02"), e.MoodScore, preview))
+	}
+
+	systemPrompt := fmt.Sprintf(
+		`You are searching a user's private journal. Given the query and journal entries below, return the IDs of the most relevant entries (up to %d), ordered by relevance. Only return a JSON array of entry IDs, nothing else. Example: ["id1","id2","id3"]. If no entries are relevant, return an empty array: [].`,
+		limit,
+	)
+	userPrompt := fmt.Sprintf("Query: %s\n\nEntries:\n%s", query, sb.String())
+
+	rawContent, err := s.callOpenAIDirect(systemPrompt, userPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("openai search: %w", err)
+	}
+
+	var ids []string
+	if parseErr := json.Unmarshal([]byte(rawContent), &ids); parseErr != nil {
+		slog.Warn("[daiyly] ai-search: failed to parse ids", "raw", rawContent, "error", parseErr)
+		return &AISearchResponse{Query: query, Results: []AISearchResult{}, Total: 0}, nil
+	}
+
+	keywords := extractKeywords(query)
+	results := make([]AISearchResult, 0, len(ids))
+	for _, id := range ids {
+		e, ok := entryByID[id]
+		if !ok {
+			continue // AI hallucinated an ID — skip
+		}
+		results = append(results, AISearchResult{
+			ID:               e.ID.String(),
+			Date:             e.EntryDate.Format("2006-01-02"),
+			Content:          e.Content,
+			MoodScore:        e.MoodScore,
+			RelevanceExcerpt: relevanceExcerpt(e.Content, keywords),
+		})
+	}
+
+	return &AISearchResponse{
+		Query:   query,
+		Results: results,
+		Total:   len(results),
+	}, nil
+}
+
+// AskJournal answers a natural-language question about the user's journal using GPT-4o-mini.
+//
+// Fetches the last 90 days of entries, sends them to OpenAI, and returns the answer
+// together with any referenced dates the model identifies.
+//
+// TODO: enforce per-user daily rate limit (20 req/day) at scale.
+func (s *JournalService) AskJournal(appID string, userID uuid.UUID, question string) (*AskJournalResponse, error) {
+	if len(question) == 0 {
+		return nil, fmt.Errorf("question is required")
+	}
+	if len(question) > 1000 {
+		question = question[:1000]
+	}
+
+	since := time.Now().UTC().AddDate(0, 0, -90)
+	var entries []JournalEntry
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ? AND entry_date >= ?", userID, since).
+		Order("entry_date ASC").
+		Limit(200).
+		Find(&entries).Error; err != nil {
+		return nil, fmt.Errorf("fetch entries: %w", err)
+	}
+
+	if len(entries) == 0 {
+		return &AskJournalResponse{
+			Answer:          "You have no journal entries in the last 90 days. Start journaling to ask questions about your entries.",
+			ReferencedDates: []string{},
+		}, nil
+	}
+
+	var sb strings.Builder
+	for _, e := range entries {
+		preview := e.Content
+		if len(preview) > 400 {
+			preview = preview[:400] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("[%s] MoodScore:%d %s — %s\n",
+			e.EntryDate.Format("2006-01-02"), e.MoodScore, e.MoodEmoji, preview))
+	}
+
+	systemPrompt := `You are an AI that has read all of a user's journal entries. Answer their question about their own journal truthfully and concisely. Base your answer only on the journal entries provided. At the end of your answer, on its own line, include a JSON object with any dates you referenced: {"referenced_dates":["2026-02-15","2026-02-20"]}. If no specific dates are referenced use an empty array.`
+
+	userPrompt := fmt.Sprintf("Journal entries (last 90 days):\n%s\n\nQuestion: %s", sb.String(), question)
+
+	rawContent, err := s.callOpenAIDirect(systemPrompt, userPrompt)
+	if err != nil {
+		return nil, fmt.Errorf("openai ask: %w", err)
+	}
+
+	// Split answer text from the trailing JSON block.
+	answer := rawContent
+	var referencedDates []string
+
+	lastBrace := strings.LastIndex(rawContent, "{")
+	if lastBrace != -1 {
+		jsonPart := strings.TrimSpace(rawContent[lastBrace:])
+		var parsed struct {
+			ReferencedDates []string `json:"referenced_dates"`
+		}
+		if err := json.Unmarshal([]byte(jsonPart), &parsed); err == nil {
+			referencedDates = parsed.ReferencedDates
+			answer = strings.TrimSpace(rawContent[:lastBrace])
+		}
+	}
+
+	if referencedDates == nil {
+		referencedDates = []string{}
+	}
+
+	return &AskJournalResponse{
+		Answer:          answer,
+		ReferencedDates: referencedDates,
 	}, nil
 }

@@ -81,6 +81,7 @@ func (h *JournalHandler) Create(c *fiber.Ctx) error {
 			errors.Is(err, ErrInvalidMoodScore) ||
 			errors.Is(err, ErrInvalidCardColor) ||
 			errors.Is(err, ErrInvalidPhotoURL) ||
+			errors.Is(err, ErrInvalidAudioURL) ||
 			errors.Is(err, ErrContentInappropriate) {
 			return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
 				Error: true, Message: err.Error(),
@@ -208,6 +209,7 @@ func (h *JournalHandler) Update(c *fiber.Ctx) error {
 			errors.Is(err, ErrInvalidMoodScore) ||
 			errors.Is(err, ErrInvalidCardColor) ||
 			errors.Is(err, ErrInvalidPhotoURL) ||
+			errors.Is(err, ErrInvalidAudioURL) ||
 			errors.Is(err, ErrContentInappropriate) {
 			return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
 				Error: true, Message: err.Error(),
@@ -458,4 +460,160 @@ func (h *JournalHandler) GetEntryAnalysis(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(analysis)
+}
+
+// TherapistExport returns an AI-generated therapist-ready summary of the last 30 days.
+// PREMIUM feature: gating is noted with a TODO below pending subscription check wiring.
+func (h *JournalHandler) TherapistExport(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	// TODO: Check subscription entitlement here once RevenueCat webhook is wired up.
+	// if !isPremium(c) { return c.Status(fiber.StatusPaymentRequired).JSON(...) }
+
+	report, err := h.service.TherapistExport(appID, userID)
+	if err != nil {
+		slog.Error("therapist export failed", "app", appID, "user", userID, "error", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "Failed to generate therapist export",
+		})
+	}
+
+	return c.JSON(report)
+}
+
+// TherapistReport returns the spec-compatible therapist report envelope for GET /journals/therapist-report.
+// It wraps TherapistExport output into a simpler {report, generated_at, entry_count, date_range} shape.
+// PREMIUM feature: gating is noted with a TODO below pending subscription check wiring.
+func (h *JournalHandler) TherapistReport(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	// TODO: Check subscription entitlement here once RevenueCat webhook is wired up.
+	// if !isPremium(c) { return c.Status(fiber.StatusPaymentRequired).JSON(...) }
+
+	report, err := h.service.TherapistReport(appID, userID)
+	if err != nil {
+		slog.Error("therapist report failed", "app", appID, "user", userID, "error", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "Failed to generate therapist report",
+		})
+	}
+
+	return c.JSON(report)
+}
+
+// GetNotificationTiming returns the user's optimal journaling hour based on the last 30 days.
+func (h *JournalHandler) GetNotificationTiming(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	timing, err := h.service.GetNotificationTiming(appID, userID)
+	if err != nil {
+		slog.Error("get notification timing failed", "app", appID, "user", userID, "error", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "Failed to compute notification timing",
+		})
+	}
+
+	return c.JSON(timing)
+}
+
+// AISearch performs semantic journal search using GPT-4o-mini.
+// GET /journals/ai-search?q=...&limit=10&days=90
+func (h *JournalHandler) AISearch(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	query := c.Query("q")
+	if len(query) == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
+			Error: true, Message: "query parameter 'q' is required",
+		})
+	}
+	if len(query) > 500 {
+		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
+			Error: true, Message: "query must be at most 500 characters",
+		})
+	}
+
+	limit, _ := strconv.Atoi(c.Query("limit", "10"))
+	if limit <= 0 || limit > 50 {
+		limit = 10
+	}
+
+	days, _ := strconv.Atoi(c.Query("days", "90"))
+	if days <= 0 || days > 365 {
+		days = 90
+	}
+
+	result, err := h.service.AISearchEntries(appID, userID, query, limit, days)
+	if err != nil {
+		slog.Error("ai search failed", "app", appID, "user", userID, "error", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "AI search failed",
+		})
+	}
+
+	return c.JSON(result)
+}
+
+// AskJournal answers a natural-language question about the user's journal.
+// POST /journals/ask
+func (h *JournalHandler) AskJournal(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	var req AskJournalRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
+			Error: true, Message: "Invalid request body",
+		})
+	}
+
+	if len(req.Question) == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
+			Error: true, Message: "question is required",
+		})
+	}
+	if len(req.Question) > 1000 {
+		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
+			Error: true, Message: "question must be at most 1000 characters",
+		})
+	}
+
+	result, err := h.service.AskJournal(appID, userID, req.Question)
+	if err != nil {
+		slog.Error("ask journal failed", "app", appID, "user", userID, "error", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "Failed to answer question",
+		})
+	}
+
+	return c.JSON(result)
 }

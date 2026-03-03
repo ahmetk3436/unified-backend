@@ -25,11 +25,12 @@ func (p *DaiylyPlugin) Models() []interface{} {
 		&WeeklyReport{},
 		&DailyPromptCache{},
 		&NotificationConfigCache{},
+		&TherapistExportCache{},
 	}
 }
 
 func (p *DaiylyPlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *config.Config) {
-	svc := NewJournalService(db, cfg.GLMAPIKey, cfg.GLMAPIURL, cfg.GLMModel, cfg.AITimeout)
+	svc := NewJournalService(db, cfg.GLMAPIKey, cfg.GLMAPIURL, cfg.GLMModel, cfg.AITimeout, cfg.OpenAIAPIKey, cfg.OpenAIModel)
 	handler := NewJournalHandler(svc)
 
 	// Per-user rate limiter for AI-backed endpoints. Keyed on JWT token prefix so each
@@ -86,6 +87,20 @@ func (p *DaiylyPlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *con
 	router.Get("/journals/weekly-report", aiHeavyLimiter, handler.GetWeeklyReport)
 	router.Get("/journals/flashbacks", handler.GetFlashbacks)
 	router.Get("/journals/notification-config", aiHeavyLimiter, handler.GetNotificationConfig)
+	router.Get("/journals/therapist-export", aiHeavyLimiter, handler.TherapistExport)
+	// /journals/therapist-report is the spec-required alias for the same feature.
+	router.Get("/journals/therapist-report", aiHeavyLimiter, handler.TherapistReport)
+	router.Get("/journals/notification-timing", handler.GetNotificationTiming)
+
+	// AI semantic search and ask-your-journal (MUST come before :id catch-all)
+	router.Get("/journals/ai-search", aiLightLimiter, handler.AISearch)
+	router.Post("/journals/ask", aiLightLimiter, handler.AskJournal)
+
+	// Upload routes — photo storage and audio transcription (MUST come before :id catch-all).
+	// Protected by JWT (upstream middleware). Global 60 req/min applies.
+	uploadHandler := NewUploadHandler(cfg.OpenAIAPIKey, cfg.AITimeout, "./uploads")
+	router.Post("/journals/upload-photo", uploadHandler.UploadPhoto)
+	router.Post("/journals/transcribe", uploadHandler.Transcribe)
 
 	// Parameterized routes (MUST be last)
 	router.Get("/journals/:id", handler.Get)

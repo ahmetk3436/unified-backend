@@ -14,8 +14,10 @@ type JournalEntry struct {
 	MoodEmoji string         `gorm:"type:varchar(10)" json:"mood_emoji"`
 	MoodScore int            `gorm:"default:50" json:"mood_score"`
 	Content   string         `gorm:"type:text" json:"content"`
-	PhotoURL  string         `gorm:"type:text" json:"photo_url"`
-	CardColor string         `gorm:"type:varchar(7)" json:"card_color"`
+	PhotoURL   string         `gorm:"type:text" json:"photo_url"`
+	AudioURL   string         `gorm:"type:text" json:"audio_url"`
+	Transcript string         `gorm:"type:text" json:"transcript"`
+	CardColor  string         `gorm:"type:varchar(7)" json:"card_color"`
 	EntryDate time.Time      `gorm:"index" json:"entry_date"`
 	IsPrivate bool           `gorm:"default:true" json:"is_private"`
 	CreatedAt time.Time      `json:"created_at"`
@@ -24,15 +26,17 @@ type JournalEntry struct {
 }
 
 type JournalStreak struct {
-	ID            uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
-	AppID         string    `gorm:"size:50;not null;index;uniqueIndex:idx_journal_streak_app_user" json:"app_id"`
-	UserID        uuid.UUID `gorm:"type:uuid;uniqueIndex:idx_journal_streak_app_user" json:"user_id"`
-	CurrentStreak int       `gorm:"default:0" json:"current_streak"`
-	LongestStreak int       `gorm:"default:0" json:"longest_streak"`
-	TotalEntries  int       `gorm:"default:0" json:"total_entries"`
-	LastEntryDate time.Time `json:"last_entry_date"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID                uuid.UUID  `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	AppID             string     `gorm:"size:50;not null;index;uniqueIndex:idx_journal_streak_app_user" json:"app_id"`
+	UserID            uuid.UUID  `gorm:"type:uuid;uniqueIndex:idx_journal_streak_app_user" json:"user_id"`
+	CurrentStreak     int        `gorm:"default:0" json:"current_streak"`
+	LongestStreak     int        `gorm:"default:0" json:"longest_streak"`
+	TotalEntries      int        `gorm:"default:0" json:"total_entries"`
+	LastEntryDate     time.Time  `json:"last_entry_date"`
+	GracePeriodActive bool       `gorm:"default:false" json:"grace_period_active"`
+	GracePeriodUsedAt *time.Time `gorm:"default:null" json:"grace_period_used_at"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 var MoodEmojis = []string{"😊", "😢", "😡", "😰", "😴", "🥳", "😌", "🤔", "😍", "😤", "😔", "😐"}
@@ -41,22 +45,26 @@ var CardColors = []string{"#fef3c7", "#dbeafe", "#dcfce7", "#fce7f3", "#ede9fe",
 // --- DTOs ---
 
 type CreateJournalRequest struct {
-	MoodEmoji string `json:"mood_emoji"`
-	MoodScore int    `json:"mood_score"`
-	Content   string `json:"content"`
-	PhotoURL  string `json:"photo_url"`
-	CardColor string `json:"card_color"`
-	IsPrivate bool   `json:"is_private"`
-	EntryDate string `json:"entry_date"` // "YYYY-MM-DD" from client's local timezone; optional
+	MoodEmoji  string `json:"mood_emoji"`
+	MoodScore  int    `json:"mood_score"`
+	Content    string `json:"content"`
+	PhotoURL   string `json:"photo_url"`
+	AudioURL   string `json:"audio_url"`
+	Transcript string `json:"transcript"`
+	CardColor  string `json:"card_color"`
+	IsPrivate  bool   `json:"is_private"`
+	EntryDate  string `json:"entry_date"` // "YYYY-MM-DD" from client's local timezone; optional
 }
 
 type UpdateJournalRequest struct {
-	MoodEmoji *string `json:"mood_emoji"`
-	MoodScore *int    `json:"mood_score"`
-	Content   *string `json:"content"`
-	PhotoURL  *string `json:"photo_url"`
-	CardColor *string `json:"card_color"`
-	IsPrivate *bool   `json:"is_private"`
+	MoodEmoji  *string `json:"mood_emoji"`
+	MoodScore  *int    `json:"mood_score"`
+	Content    *string `json:"content"`
+	PhotoURL   *string `json:"photo_url"`
+	AudioURL   *string `json:"audio_url"`
+	Transcript *string `json:"transcript"`
+	CardColor  *string `json:"card_color"`
+	IsPrivate  *bool   `json:"is_private"`
 }
 
 type JournalListResponse struct {
@@ -201,6 +209,18 @@ type FlashbacksResponse struct {
 	Entries []FlashbackEntry `json:"entries"`
 }
 
+// TherapistExportCache stores the AI-generated therapist export per user (6h TTL).
+type TherapistExportCache struct {
+	ID          uuid.UUID      `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	AppID       string         `gorm:"size:50;not null;index" json:"app_id"`
+	UserID      uuid.UUID      `gorm:"type:uuid;index;uniqueIndex:idx_therapist_export_user" json:"user_id"`
+	ReportJSON  string         `gorm:"type:text" json:"report_json"`
+	GeneratedAt time.Time      `json:"generated_at"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
 // --- Notification Config DTOs ---
 
 type NotificationMessage struct {
@@ -213,4 +233,82 @@ type NotificationConfigResponse struct {
 	SuggestedMinute int                   `json:"suggested_minute"`
 	DailyMessages   []NotificationMessage `json:"daily_messages"`
 	StreakMessages   []NotificationMessage `json:"streak_messages"`
+}
+
+// --- Therapist Export DTOs ---
+
+type NotableEntry struct {
+	Date      string `json:"date"`
+	Excerpt   string `json:"excerpt"`
+	MoodScore int    `json:"mood_score"`
+}
+
+// TherapistExportResponse is the structured therapist-ready summary returned by /journals/therapist-export.
+// This is a PREMIUM feature; non-subscribers should be gated at the handler level once subscription
+// checking is wired up. For now the service generates the report unconditionally.
+type TherapistExportResponse struct {
+	Period            string         `json:"period"`
+	EntryCount        int            `json:"entry_count"`
+	AvgMoodScore      int            `json:"avg_mood_score"`
+	MoodTrend         string         `json:"mood_trend"`
+	DominantThemes    []string       `json:"dominant_themes"`
+	EmotionalPatterns string         `json:"emotional_patterns"`
+	NotableEntries    []NotableEntry `json:"notable_entries"`
+	AINarrative       string         `json:"ai_narrative"`
+	Suggestions       string         `json:"suggestions"`
+	GeneratedAt       string         `json:"generated_at"`
+}
+
+// TherapistReportDateRange is used by TherapistReportResponse.
+type TherapistReportDateRange struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// TherapistReportResponse is the spec-compatible response shape for GET /journals/therapist-report.
+// It wraps the rich AI narrative from TherapistExportResponse into a simpler envelope.
+type TherapistReportResponse struct {
+	Report      string                   `json:"report"`
+	GeneratedAt string                   `json:"generated_at"`
+	EntryCount  int                      `json:"entry_count"`
+	DateRange   TherapistReportDateRange `json:"date_range"`
+}
+
+// --- Notification Timing DTOs ---
+
+// NotificationTimingResponse is returned by /journals/notification-timing.
+type NotificationTimingResponse struct {
+	OptimalHour      *int    `json:"optimal_hour"`
+	OptimalHourLabel string  `json:"optimal_hour_label"`
+	Confidence       float64 `json:"confidence"`
+	DaysAnalyzed     int     `json:"days_analyzed"`
+}
+
+// --- AI Search / Ask DTOs ---
+
+// AISearchResult is a single result entry returned by /journals/ai-search.
+type AISearchResult struct {
+	ID               string `json:"id"`
+	Date             string `json:"date"`
+	Content          string `json:"content"`
+	MoodScore        int    `json:"mood_score"`
+	RelevanceExcerpt string `json:"relevance_excerpt"`
+}
+
+// AISearchResponse is returned by GET /journals/ai-search.
+type AISearchResponse struct {
+	Query   string           `json:"query"`
+	Results []AISearchResult `json:"results"`
+	Total   int              `json:"total"`
+}
+
+// AskJournalRequest is the request body for POST /journals/ask.
+type AskJournalRequest struct {
+	Question string `json:"question"`
+}
+
+// AskJournalResponse is returned by POST /journals/ask.
+type AskJournalResponse struct {
+	Answer          string   `json:"answer"`
+	ReferencedDates []string `json:"referenced_dates"`
 }

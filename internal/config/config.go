@@ -32,6 +32,8 @@ type Config struct {
 	OpenAIAPIKey string
 	OpenAIModel  string
 
+	FalAPIKey string
+
 	AITimeout time.Duration
 
 	// Admin
@@ -78,6 +80,8 @@ func Load() *Config {
 
 		OpenAIAPIKey: getEnv("OPENAI_API_KEY", ""),
 		OpenAIModel:  getEnv("OPENAI_MODEL", "gpt-4o-mini"),
+
+		FalAPIKey: getEnv("FAL_API_KEY", ""),
 
 		AITimeout: parseDuration(getEnv("AI_TIMEOUT", "60s")),
 
