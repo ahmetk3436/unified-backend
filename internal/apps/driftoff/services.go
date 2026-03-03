@@ -2,6 +2,7 @@ package driftoff
 
 import (
 	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -518,6 +519,75 @@ func (s *SleepService) GetSleepDebt(appID string, userID uuid.UUID, goalHours fl
 		DailyGoalHours:   goalHours,
 		RollingDays:      rollingDays,
 	}, nil
+}
+
+// ExportSleepData returns all sleep sessions for the user as CSV or JSON bytes.
+// format must be "csv" or "json". Returns (data, mimeType, error).
+func (s *SleepService) ExportSleepData(appID string, userID uuid.UUID, format string) ([]byte, string, error) {
+	var sessions []SleepSession
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ?", userID).
+		Order("bedtime DESC").
+		Limit(10000).
+		Find(&sessions).Error; err != nil {
+		return nil, "", fmt.Errorf("fetch sessions: %w", err)
+	}
+
+	if format == "csv" {
+		var buf bytes.Buffer
+		w := csv.NewWriter(&buf)
+		// Write header
+		_ = w.Write([]string{
+			"date", "bedtime", "wake_time", "duration_hours",
+			"score", "efficiency", "rem_minutes", "deep_minutes",
+			"light_minutes", "notes",
+		})
+		for _, sess := range sessions {
+			// Parse phases for REM/deep/light
+			var phases []PhaseDTO
+			_ = json.Unmarshal([]byte(sess.PhasesJSON), &phases)
+			var remMin, deepMin, lightMin int
+			for _, p := range phases {
+				switch p.Type {
+				case "rem":
+					remMin += p.DurationMinutes
+				case "deep":
+					deepMin += p.DurationMinutes
+				case "light":
+					lightMin += p.DurationMinutes
+				}
+			}
+			durationHours := fmt.Sprintf("%.2f", float64(sess.DurationMinutes)/60.0)
+			_ = w.Write([]string{
+				sess.Bedtime.Format("2006-01-02"),
+				sess.Bedtime.Format(time.RFC3339),
+				sess.WakeTime.Format(time.RFC3339),
+				durationHours,
+				fmt.Sprintf("%d", sess.Score),
+				fmt.Sprintf("%.1f", sess.Efficiency),
+				fmt.Sprintf("%d", remMin),
+				fmt.Sprintf("%d", deepMin),
+				fmt.Sprintf("%d", lightMin),
+				sess.Notes,
+			})
+		}
+		w.Flush()
+		if err := w.Error(); err != nil {
+			return nil, "", fmt.Errorf("csv write: %w", err)
+		}
+		return buf.Bytes(), "text/csv", nil
+	}
+
+	// JSON export
+	out := make([]SleepResponse, len(sessions))
+	for i, sess := range sessions {
+		out[i] = *s.toResponse(sess)
+	}
+	data, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return nil, "", fmt.Errorf("json marshal: %w", err)
+	}
+	return data, "application/json", nil
 }
 
 // updateStreak recalculates the user's streak after a new session.

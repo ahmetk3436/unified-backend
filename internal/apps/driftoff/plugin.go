@@ -35,6 +35,9 @@ func (p *DriftoffPlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *c
 	router.Get("/sleeps/debt", handler.GetSleepDebt)
 	router.Post("/sleeps/batch", handler.BatchImport)
 
+	// Export
+	router.Get("/sleeps/export", handler.ExportSleepData)
+
 	// AI-powered routes (MUST be before parameterized routes)
 	router.Get("/sleeps/coach", handler.GetSleepCoach)
 	router.Get("/sleeps/doctor-report", handler.GetDoctorReport)

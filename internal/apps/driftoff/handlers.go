@@ -237,6 +237,31 @@ func (h *SleepHandler) GetSleepDebt(c *fiber.Ctx) error {
 	return c.JSON(resp)
 }
 
+// ExportSleepData returns all sleep sessions as CSV or JSON download.
+func (h *SleepHandler) ExportSleepData(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
+	}
+
+	format := c.Query("format", "csv")
+	if format != "csv" && format != "json" {
+		return fiber.NewError(fiber.StatusBadRequest, "format must be csv or json")
+	}
+
+	data, mimeType, err := h.svc.ExportSleepData(appID, userID, format)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "export failed")
+	}
+
+	ext := format
+	filename := "driftoff_sleep_export_" + time.Now().Format("2006-01-02") + "." + ext
+	c.Set("Content-Disposition", "attachment; filename=\""+filename+"\"")
+	c.Set("Content-Type", mimeType)
+	return c.Send(data)
+}
+
 // GetSleepCoach returns AI-generated personalised sleep coaching. Cached 6h per user.
 func (h *SleepHandler) GetSleepCoach(c *fiber.Ctx) error {
 	appID := tenant.GetAppID(c)
