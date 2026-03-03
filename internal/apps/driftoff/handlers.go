@@ -374,3 +374,54 @@ func (h *SleepHandler) GetCaffeineLogs(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{"logs": logs, "days": days})
 }
+
+// GetSoundCorrelation handles GET /sleeps/sound-correlation
+// Returns average sleep efficiency per soundscape (3+ sessions required per sound).
+func (h *SleepHandler) GetSoundCorrelation(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
+	}
+
+	resp, err := h.svc.GetSoundCorrelation(appID, userID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "sound correlation unavailable")
+	}
+
+	return c.JSON(resp)
+}
+
+// GetTempCorrelation handles GET /sleeps/temp-correlation
+// Returns average sleep score per room temperature (3+ sessions required per temp).
+func (h *SleepHandler) GetTempCorrelation(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
+	}
+
+	resp, err := h.svc.GetTempCorrelation(appID, userID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "temp correlation unavailable")
+	}
+
+	return c.JSON(resp)
+}
+
+// GetCBTIInsights handles GET /sleeps/cbti-insights
+// Returns clinically-validated CBT-I recommendations based on the user's sleep pattern.
+func (h *SleepHandler) GetCBTIInsights(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
+	}
+
+	resp, err := h.svc.GetCBTIInsights(appID, userID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "cbti insights unavailable")
+	}
+
+	return c.JSON(resp)
+}

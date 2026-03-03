@@ -374,20 +374,26 @@ func (s *MoodService) Create(appID string, userID uuid.UUID, req CreateMoodReque
 	activitiesJSON, _ := json.Marshal(req.Activities)
 
 	entry := MoodCheckIn{
-		AppID:          appID,
-		UserID:         userID,
-		EmotionID:      req.Emotion.ID,
-		EmotionName:    req.Emotion.Name,
-		EmotionEmoji:   req.Emotion.Emoji,
-		EmotionColor:   req.Emotion.Color,
-		EmotionCustom:  req.Emotion.IsCustom,
-		Intensity:      req.Intensity,
-		Note:           req.Note,
-		TriggersJSON:   string(triggersJSON),
-		ActivitiesJSON: string(activitiesJSON),
-		PhotoURL:       req.PhotoURL,
-		AudioURL:       req.AudioURL,
-		Transcript:     req.Transcript,
+		AppID:           appID,
+		UserID:          userID,
+		EmotionID:       req.Emotion.ID,
+		EmotionName:     req.Emotion.Name,
+		EmotionEmoji:    req.Emotion.Emoji,
+		EmotionColor:    req.Emotion.Color,
+		EmotionCustom:   req.Emotion.IsCustom,
+		Intensity:       req.Intensity,
+		Note:            req.Note,
+		TriggersJSON:    string(triggersJSON),
+		ActivitiesJSON:  string(activitiesJSON),
+		PhotoURL:        req.PhotoURL,
+		AudioURL:        req.AudioURL,
+		Transcript:      req.Transcript,
+		WhereContext:    req.WhereContext,
+		WithContext:     req.WithContext,
+		ActivityContext: req.ActivityContext,
+		SubEmotion:      req.SubEmotion,
+		MedTaken:        req.MedTaken,
+		MedName:         req.MedName,
 	}
 
 	if err := s.db.Create(&entry).Error; err != nil {
@@ -531,6 +537,24 @@ func (s *MoodService) Update(appID string, userID uuid.UUID, id uuid.UUID, req U
 			return nil, errors.New("transcript too long (max 50000 characters)")
 		}
 		entry.Transcript = req.Transcript
+	}
+	if req.WhereContext != nil {
+		entry.WhereContext = req.WhereContext
+	}
+	if req.WithContext != nil {
+		entry.WithContext = req.WithContext
+	}
+	if req.ActivityContext != nil {
+		entry.ActivityContext = req.ActivityContext
+	}
+	if req.SubEmotion != nil {
+		entry.SubEmotion = req.SubEmotion
+	}
+	if req.MedTaken != nil {
+		entry.MedTaken = req.MedTaken
+	}
+	if req.MedName != nil {
+		entry.MedName = req.MedName
 	}
 
 	if err := s.db.Save(&entry).Error; err != nil {
@@ -1564,4 +1588,116 @@ func (s *VocabularyService) BulkSync(appID string, userID uuid.UUID, req BulkSyn
 		Triggers:   triggers,
 		Activities: activities,
 	}, nil
+}
+
+// GetContextInsights returns average mood intensity grouped by context category
+// (where, with_whom, activity). Pure SQL aggregation, no AI.
+func (s *MoodService) GetContextInsights(appID string, userID uuid.UUID, days int) (*ContextInsightsResponse, error) {
+	since := time.Now().UTC().AddDate(0, 0, -days)
+
+	type row struct {
+		Context string
+		Avg     float64
+	}
+
+	roundAvg := func(v float64) float64 {
+		return float64(int(v*100+0.5)) / 100
+	}
+
+	buildMap := func(col string) (map[string]float64, error) {
+		var rows []struct {
+			Context string  `gorm:"column:ctx"`
+			Avg     float64 `gorm:"column:avg_intensity"`
+		}
+		err := s.db.Raw(
+			"SELECT "+col+" AS ctx, ROUND(AVG(intensity)::numeric, 2) AS avg_intensity "+
+				"FROM mood_check_ins "+
+				"WHERE app_id = ? AND user_id = ? AND created_at >= ? AND "+col+" IS NOT NULL AND "+col+" != '' "+
+				"GROUP BY "+col,
+			appID, userID, since,
+		).Scan(&rows).Error
+		if err != nil {
+			return nil, err
+		}
+		m := make(map[string]float64, len(rows))
+		for _, r := range rows {
+			m[r.Context] = roundAvg(r.Avg)
+		}
+		return m, nil
+	}
+
+	whereMap, err := buildMap("where_context")
+	if err != nil {
+		return nil, fmt.Errorf("where context: %w", err)
+	}
+	withMap, err := buildMap("with_context")
+	if err != nil {
+		return nil, fmt.Errorf("with context: %w", err)
+	}
+	activityMap, err := buildMap("activity_context")
+	if err != nil {
+		return nil, fmt.Errorf("activity context: %w", err)
+	}
+
+	return &ContextInsightsResponse{
+		Where:    whereMap,
+		With:     withMap,
+		Activity: activityMap,
+		Days:     days,
+	}, nil
+}
+
+// GetMedCorrelation returns average mood intensity on days where the user
+// took their medication vs days they did not (last N days).
+func (s *MoodService) GetMedCorrelation(appID string, userID uuid.UUID, medName string, days int) (*MedCorrelationResponse, error) {
+	since := time.Now().UTC().AddDate(0, 0, -days)
+
+	type aggRow struct {
+		MedTaken bool    `gorm:"column:med_taken"`
+		AvgInt   float64 `gorm:"column:avg_intensity"`
+		Cnt      int     `gorm:"column:cnt"`
+	}
+	var rows []aggRow
+	err := s.db.Raw(
+		"SELECT med_taken, ROUND(AVG(intensity)::numeric, 2) AS avg_intensity, COUNT(*) AS cnt "+
+			"FROM mood_check_ins "+
+			"WHERE app_id = ? AND user_id = ? AND created_at >= ? AND med_name = ? AND med_taken IS NOT NULL "+
+			"GROUP BY med_taken",
+		appID, userID, since, medName,
+	).Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("med correlation: %w", err)
+	}
+
+	resp := &MedCorrelationResponse{
+		MedName: medName,
+		Days:    days,
+	}
+	for _, r := range rows {
+		if r.MedTaken {
+			resp.TakenAvg = r.AvgInt
+			resp.TakenCount = r.Cnt
+		} else {
+			resp.NotTakenAvg = r.AvgInt
+			resp.NotTakenCount = r.Cnt
+		}
+	}
+	return resp, nil
+}
+
+// SubEmotionVocabulary is the static sub-emotion map returned by GetSubEmotions.
+var SubEmotionVocabulary = map[string][]string{
+	"joy":     {"elated", "content", "grateful", "excited", "proud", "optimistic"},
+	"calm":    {"peaceful", "relaxed", "centered", "balanced", "grounded", "serene"},
+	"sad":     {"hopeless", "disappointed", "lonely", "melancholy", "grief", "numb"},
+	"angry":   {"frustrated", "irritated", "resentful", "furious", "enraged", "bitter"},
+	"anxious": {"overwhelmed", "nervous", "worried", "panicked", "restless", "dread"},
+	"tired":   {"exhausted", "drained", "sluggish", "burned_out", "fatigued", "sleepy"},
+	"love":    {"affectionate", "connected", "warmth", "adored", "cherished", "devoted"},
+	"energy":  {"motivated", "inspired", "focused", "alive", "enthusiastic", "driven"},
+}
+
+// GetSubEmotions returns the static sub-emotion vocabulary. No DB access needed.
+func (s *MoodService) GetSubEmotions() *SubEmotionsResponse {
+	return &SubEmotionsResponse{SubEmotions: SubEmotionVocabulary}
 }

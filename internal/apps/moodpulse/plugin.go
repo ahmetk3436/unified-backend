@@ -116,6 +116,11 @@ func (p *MoodPulsePlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *
 	router.Get("/moods/drivers", handler.GetMoodDrivers)
 	router.Get("/moods/forecast", handler.GetMoodForecast)
 
+	// Context tagging + medication tracking insights (MUST be before :id catch-all)
+	router.Get("/moods/context-insights", handler.GetContextInsights)
+	router.Get("/moods/med-correlation", handler.GetMedCorrelation)
+	router.Get("/moods/sub-emotions", handler.GetSubEmotions)
+
 	// Parameterized routes last
 	router.Get("/moods/:id", handler.Get)
 	router.Put("/moods/:id", handler.Update)

@@ -20,13 +20,15 @@ type SleepSession struct {
 	WakeTime        time.Time      `json:"wake_time"`
 	PhasesJSON      string         `gorm:"type:jsonb;default:'[]'" json:"-"`
 	SoundsJSON      string         `gorm:"type:jsonb;default:'[]'" json:"-"`
-	AlarmTime       *time.Time     `json:"alarm_time"`
-	AlarmPhase      string         `gorm:"size:20" json:"alarm_phase"`
-	Notes           string         `gorm:"type:text" json:"notes"`           // Optional user note for session
-	HygieneScore    *int           `json:"hygiene_score"`                    // 0-100 score computed async
-	CreatedAt       time.Time      `json:"created_at"`
-	UpdatedAt       time.Time      `json:"updated_at"`
-	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
+	AlarmTime         *time.Time     `json:"alarm_time"`
+	AlarmPhase        string         `gorm:"size:20" json:"alarm_phase"`
+	Notes             string         `gorm:"type:text" json:"notes"`              // Optional user note for session
+	HygieneScore      *int           `json:"hygiene_score"`                       // 0-100 score computed async
+	SoundscapePlayed  *string        `json:"soundscape_played" gorm:"size:100"`   // e.g. "brown_noise", "rain"
+	RoomTemp          *string        `json:"room_temp" gorm:"size:20"`            // "cool"/"comfortable"/"warm"
+	CreatedAt         time.Time      `json:"created_at"`
+	UpdatedAt         time.Time      `json:"updated_at"`
+	DeletedAt         gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // DailyCaffeineLog records caffeine intake and exercise for a single day.
@@ -73,40 +75,46 @@ type SoundDTO struct {
 }
 
 type CreateSleepRequest struct {
-	Score           int        `json:"score"`
-	DurationMinutes int        `json:"duration_minutes"`
-	Efficiency      float64    `json:"efficiency"`
-	LatencyMinutes  int        `json:"latency_minutes"`
-	Bedtime         string     `json:"bedtime"`
-	WakeTime        string     `json:"wake_time"`
-	Phases          []PhaseDTO `json:"phases"`
-	Sounds          []SoundDTO `json:"sounds"`
-	AlarmTime       *string    `json:"alarm_time"`
-	AlarmPhase      string     `json:"alarm_phase"`
+	Score            int        `json:"score"`
+	DurationMinutes  int        `json:"duration_minutes"`
+	Efficiency       float64    `json:"efficiency"`
+	LatencyMinutes   int        `json:"latency_minutes"`
+	Bedtime          string     `json:"bedtime"`
+	WakeTime         string     `json:"wake_time"`
+	Phases           []PhaseDTO `json:"phases"`
+	Sounds           []SoundDTO `json:"sounds"`
+	AlarmTime        *string    `json:"alarm_time"`
+	AlarmPhase       string     `json:"alarm_phase"`
+	SoundscapePlayed *string    `json:"soundscape_played"`
+	RoomTemp         *string    `json:"room_temp"`
 }
 
 type UpdateSleepRequest struct {
-	Score           *int        `json:"score"`
-	DurationMinutes *int        `json:"duration_minutes"`
-	Efficiency      *float64    `json:"efficiency"`
-	LatencyMinutes  *int        `json:"latency_minutes"`
-	Phases          *[]PhaseDTO `json:"phases"`
-	Sounds          *[]SoundDTO `json:"sounds"`
+	Score            *int        `json:"score"`
+	DurationMinutes  *int        `json:"duration_minutes"`
+	Efficiency       *float64    `json:"efficiency"`
+	LatencyMinutes   *int        `json:"latency_minutes"`
+	Phases           *[]PhaseDTO `json:"phases"`
+	Sounds           *[]SoundDTO `json:"sounds"`
+	SoundscapePlayed *string     `json:"soundscape_played"`
+	RoomTemp         *string     `json:"room_temp"`
 }
 
 type SleepResponse struct {
-	ID              uuid.UUID  `json:"id"`
-	Score           int        `json:"score"`
-	DurationMinutes int        `json:"duration_minutes"`
-	Efficiency      float64    `json:"efficiency"`
-	LatencyMinutes  int        `json:"latency_minutes"`
-	Bedtime         string     `json:"bedtime"`
-	WakeTime        string     `json:"wake_time"`
-	Phases          []PhaseDTO `json:"phases"`
-	Sounds          []SoundDTO `json:"sounds"`
-	AlarmTime       *string    `json:"alarm_time"`
-	AlarmPhase      string     `json:"alarm_phase"`
-	CreatedAt       string     `json:"created_at"`
+	ID               uuid.UUID  `json:"id"`
+	Score            int        `json:"score"`
+	DurationMinutes  int        `json:"duration_minutes"`
+	Efficiency       float64    `json:"efficiency"`
+	LatencyMinutes   int        `json:"latency_minutes"`
+	Bedtime          string     `json:"bedtime"`
+	WakeTime         string     `json:"wake_time"`
+	Phases           []PhaseDTO `json:"phases"`
+	Sounds           []SoundDTO `json:"sounds"`
+	AlarmTime        *string    `json:"alarm_time"`
+	AlarmPhase       string     `json:"alarm_phase"`
+	SoundscapePlayed *string    `json:"soundscape_played"`
+	RoomTemp         *string    `json:"room_temp"`
+	CreatedAt        string     `json:"created_at"`
 }
 
 type SleepListResponse struct {
@@ -202,4 +210,28 @@ type HygieneScoreResponse struct {
 	Grade      string            `json:"grade"`
 	Dimensions map[string]int    `json:"dimensions"`
 	Insight    string            `json:"insight"`
+}
+
+// --- Sound Correlation ---
+
+type SoundCorrelationResponse struct {
+	Correlations map[string]float64 `json:"correlations"` // soundscape -> avg efficiency%
+}
+
+// --- Temperature Correlation ---
+
+type TempCorrelationResponse struct {
+	Correlations map[string]float64 `json:"correlations"` // room_temp -> avg score
+}
+
+// --- CBT-I Insights ---
+
+type CBTIRecommendation struct {
+	Type     string `json:"type"`
+	Message  string `json:"message"`
+	Evidence string `json:"evidence"`
+}
+
+type CBTIInsightsResponse struct {
+	Recommendations []CBTIRecommendation `json:"recommendations"`
 }

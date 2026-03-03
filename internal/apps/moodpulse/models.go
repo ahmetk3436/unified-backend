@@ -27,6 +27,14 @@ type MoodCheckIn struct {
 	DetectedEmotion   string         `json:"detected_emotion" gorm:"type:varchar(50)"`
 	EmotionScores     *string        `json:"emotion_scores" gorm:"type:text"` // JSON array
 	EmotionAnalyzedAt *time.Time     `json:"emotion_analyzed_at"`
+	// Context tagging (nullable — all optional)
+	WhereContext    *string `json:"where_context" gorm:"size:50"`    // home/work/outside/commute/social/gym
+	WithContext     *string `json:"with_context" gorm:"size:50"`     // alone/partner/friends/family/colleagues/strangers
+	ActivityContext *string `json:"activity_context" gorm:"size:50"` // working/relaxing/exercising/eating/socializing/commuting
+	SubEmotion      *string `json:"sub_emotion" gorm:"size:50"`      // granular emotion (hopeless/frustrated/overwhelmed etc.)
+	// Medication/supplement tracking (nullable — all optional)
+	MedTaken *bool   `json:"med_taken"`                  // did user take their tracked medication today?
+	MedName  *string `json:"med_name" gorm:"size:100"`   // what medication/supplement
 	CreatedAt         time.Time      `json:"created_at"`
 	UpdatedAt         time.Time      `json:"updated_at"`
 	DeletedAt         gorm.DeletedAt `gorm:"index" json:"-"`
@@ -63,25 +71,37 @@ type EmotionDTO struct {
 }
 
 type CreateMoodRequest struct {
-	Emotion    EmotionDTO `json:"emotion"`
-	Intensity  int        `json:"intensity"`
-	Note       string     `json:"note"`
-	Triggers   []TagItem  `json:"triggers"`
-	Activities []TagItem  `json:"activities"`
-	PhotoURL   string     `json:"photo_url"`
-	AudioURL   string     `json:"audio_url"`
-	Transcript *string    `json:"transcript"`
+	Emotion         EmotionDTO `json:"emotion"`
+	Intensity       int        `json:"intensity"`
+	Note            string     `json:"note"`
+	Triggers        []TagItem  `json:"triggers"`
+	Activities      []TagItem  `json:"activities"`
+	PhotoURL        string     `json:"photo_url"`
+	AudioURL        string     `json:"audio_url"`
+	Transcript      *string    `json:"transcript"`
+	WhereContext    *string    `json:"where_context"`
+	WithContext     *string    `json:"with_context"`
+	ActivityContext *string    `json:"activity_context"`
+	SubEmotion      *string    `json:"sub_emotion"`
+	MedTaken        *bool      `json:"med_taken"`
+	MedName         *string    `json:"med_name"`
 }
 
 type UpdateMoodRequest struct {
-	Emotion    *EmotionDTO `json:"emotion"`
-	Intensity  *int        `json:"intensity"`
-	Note       *string     `json:"note"`
-	Triggers   *[]TagItem  `json:"triggers"`
-	Activities *[]TagItem  `json:"activities"`
-	PhotoURL   *string     `json:"photo_url"`
-	AudioURL   *string     `json:"audio_url"`
-	Transcript *string     `json:"transcript"`
+	Emotion         *EmotionDTO `json:"emotion"`
+	Intensity       *int        `json:"intensity"`
+	Note            *string     `json:"note"`
+	Triggers        *[]TagItem  `json:"triggers"`
+	Activities      *[]TagItem  `json:"activities"`
+	PhotoURL        *string     `json:"photo_url"`
+	AudioURL        *string     `json:"audio_url"`
+	Transcript      *string     `json:"transcript"`
+	WhereContext    *string     `json:"where_context"`
+	WithContext     *string     `json:"with_context"`
+	ActivityContext *string     `json:"activity_context"`
+	SubEmotion      *string     `json:"sub_emotion"`
+	MedTaken        *bool       `json:"med_taken"`
+	MedName         *string     `json:"med_name"`
 }
 
 type AIInsightsResponse struct {
@@ -258,4 +278,27 @@ type BulkSyncVocabularyResponse struct {
 	Emotions   []CustomEmotion  `json:"emotions"`
 	Triggers   []CustomTrigger  `json:"triggers"`
 	Activities []CustomActivity `json:"activities"`
+}
+
+// ContextInsightsResponse holds avg intensity per context category.
+type ContextInsightsResponse struct {
+	Where    map[string]float64 `json:"where"`
+	With     map[string]float64 `json:"with"`
+	Activity map[string]float64 `json:"activity"`
+	Days     int                `json:"days"`
+}
+
+// MedCorrelationResponse holds avg intensity on med-taken vs not-taken days.
+type MedCorrelationResponse struct {
+	MedName     string  `json:"med_name"`
+	TakenAvg    float64 `json:"taken_avg"`
+	NotTakenAvg float64 `json:"not_taken_avg"`
+	TakenCount  int     `json:"taken_count"`
+	NotTakenCount int   `json:"not_taken_count"`
+	Days        int     `json:"days"`
+}
+
+// SubEmotionsResponse holds the static sub-emotion vocabulary map.
+type SubEmotionsResponse struct {
+	SubEmotions map[string][]string `json:"sub_emotions"`
 }

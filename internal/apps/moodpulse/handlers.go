@@ -600,3 +600,88 @@ func (h *MoodHandler) GetMoodForecast(c *fiber.Ctx) error {
 
 	return c.JSON(forecast)
 }
+
+// GetContextInsights handles GET /moods/context-insights?days=30
+// Returns average mood intensity per context category (where/with/activity).
+func (h *MoodHandler) GetContextInsights(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	days, _ := strconv.Atoi(c.Query("days", "30"))
+	if days < 1 {
+		days = 1
+	}
+	if days > 90 {
+		days = 90
+	}
+
+	resp, err := h.svc.GetContextInsights(appID, userID, days)
+	if err != nil {
+		slog.Error("[moodpulse] context insights failed", "app", appID, "user", userID, "error", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "Context insights unavailable",
+		})
+	}
+
+	return c.JSON(resp)
+}
+
+// GetMedCorrelation handles GET /moods/med-correlation?med_name=X&days=30
+// Returns average mood intensity on medication-taken days vs not-taken days.
+func (h *MoodHandler) GetMedCorrelation(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	medName := c.Query("med_name")
+	if medName == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
+			Error: true, Message: "med_name is required",
+		})
+	}
+	if len(medName) > 100 {
+		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
+			Error: true, Message: "med_name must be at most 100 characters",
+		})
+	}
+
+	days, _ := strconv.Atoi(c.Query("days", "30"))
+	if days < 1 {
+		days = 1
+	}
+	if days > 90 {
+		days = 90
+	}
+
+	resp, err := h.svc.GetMedCorrelation(appID, userID, medName, days)
+	if err != nil {
+		slog.Error("[moodpulse] med correlation failed", "app", appID, "user", userID, "error", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "Medication correlation unavailable",
+		})
+	}
+
+	return c.JSON(resp)
+}
+
+// GetSubEmotions handles GET /moods/sub-emotions
+// Returns the static sub-emotion vocabulary map. No DB access, no auth needed
+// beyond the existing JWT middleware applied at router level.
+func (h *MoodHandler) GetSubEmotions(c *fiber.Ctx) error {
+	_, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+	return c.JSON(h.svc.GetSubEmotions())
+}

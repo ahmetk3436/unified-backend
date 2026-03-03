@@ -168,17 +168,19 @@ func (s *SleepService) Create(appID string, userID uuid.UUID, req CreateSleepReq
 	soundsJSON, _ := json.Marshal(req.Sounds)
 
 	session := SleepSession{
-		AppID:           appID,
-		UserID:          userID,
-		Score:           req.Score,
-		DurationMinutes: req.DurationMinutes,
-		Efficiency:      req.Efficiency,
-		LatencyMinutes:  req.LatencyMinutes,
-		Bedtime:         bedtime,
-		WakeTime:        wakeTime,
-		PhasesJSON:      string(phasesJSON),
-		SoundsJSON:      string(soundsJSON),
-		AlarmPhase:      req.AlarmPhase,
+		AppID:            appID,
+		UserID:           userID,
+		Score:            req.Score,
+		DurationMinutes:  req.DurationMinutes,
+		Efficiency:       req.Efficiency,
+		LatencyMinutes:   req.LatencyMinutes,
+		Bedtime:          bedtime,
+		WakeTime:         wakeTime,
+		PhasesJSON:       string(phasesJSON),
+		SoundsJSON:       string(soundsJSON),
+		AlarmPhase:       req.AlarmPhase,
+		SoundscapePlayed: req.SoundscapePlayed,
+		RoomTemp:         req.RoomTemp,
 	}
 
 	if req.AlarmTime != nil {
@@ -268,6 +270,12 @@ func (s *SleepService) Update(appID string, userID uuid.UUID, id uuid.UUID, req 
 		}
 		j, _ := json.Marshal(*req.Sounds)
 		session.SoundsJSON = string(j)
+	}
+	if req.SoundscapePlayed != nil {
+		session.SoundscapePlayed = req.SoundscapePlayed
+	}
+	if req.RoomTemp != nil {
+		session.RoomTemp = req.RoomTemp
 	}
 
 	if err := s.db.Save(&session).Error; err != nil {
@@ -727,17 +735,19 @@ func (s *SleepService) toResponse(sess SleepSession) *SleepResponse {
 	}
 
 	resp := &SleepResponse{
-		ID:              sess.ID,
-		Score:           sess.Score,
-		DurationMinutes: sess.DurationMinutes,
-		Efficiency:      sess.Efficiency,
-		LatencyMinutes:  sess.LatencyMinutes,
-		Bedtime:         sess.Bedtime.Format(time.RFC3339),
-		WakeTime:        sess.WakeTime.Format(time.RFC3339),
-		Phases:          phases,
-		Sounds:          sounds,
-		AlarmPhase:      sess.AlarmPhase,
-		CreatedAt:       sess.CreatedAt.Format(time.RFC3339),
+		ID:               sess.ID,
+		Score:            sess.Score,
+		DurationMinutes:  sess.DurationMinutes,
+		Efficiency:       sess.Efficiency,
+		LatencyMinutes:   sess.LatencyMinutes,
+		Bedtime:          sess.Bedtime.Format(time.RFC3339),
+		WakeTime:         sess.WakeTime.Format(time.RFC3339),
+		Phases:           phases,
+		Sounds:           sounds,
+		AlarmPhase:       sess.AlarmPhase,
+		SoundscapePlayed: sess.SoundscapePlayed,
+		RoomTemp:         sess.RoomTemp,
+		CreatedAt:        sess.CreatedAt.Format(time.RFC3339),
 	}
 
 	if sess.AlarmTime != nil {
@@ -1155,4 +1165,137 @@ func (s *SleepService) GetCaffeineLog(appID string, userID uuid.UUID, days int) 
 		return nil, err
 	}
 	return logs, nil
+}
+
+// GetSoundCorrelation returns average sleep efficiency per soundscape (only soundscapes
+// with 3+ sessions are included). Pure SQL aggregation, no AI.
+func (s *SleepService) GetSoundCorrelation(appID string, userID uuid.UUID) (*SoundCorrelationResponse, error) {
+	type row struct {
+		Soundscape string  `gorm:"column:soundscape_played"`
+		AvgEff     float64 `gorm:"column:avg_efficiency"`
+	}
+	var rows []row
+	err := s.db.Raw(
+		"SELECT soundscape_played, ROUND(AVG(efficiency)::numeric, 2) AS avg_efficiency "+
+			"FROM sleep_sessions "+
+			"WHERE app_id = ? AND user_id = ? AND soundscape_played IS NOT NULL AND soundscape_played != '' "+
+			"AND deleted_at IS NULL "+
+			"GROUP BY soundscape_played HAVING COUNT(*) >= 3",
+		appID, userID,
+	).Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("sound correlation: %w", err)
+	}
+
+	m := make(map[string]float64, len(rows))
+	for _, r := range rows {
+		m[r.Soundscape] = r.AvgEff
+	}
+	return &SoundCorrelationResponse{Correlations: m}, nil
+}
+
+// GetTempCorrelation returns average sleep score per room temperature (only temperatures
+// with 3+ sessions are included). Pure SQL aggregation, no AI.
+func (s *SleepService) GetTempCorrelation(appID string, userID uuid.UUID) (*TempCorrelationResponse, error) {
+	type row struct {
+		RoomTemp string  `gorm:"column:room_temp"`
+		AvgScore float64 `gorm:"column:avg_score"`
+	}
+	var rows []row
+	err := s.db.Raw(
+		"SELECT room_temp, ROUND(AVG(score)::numeric, 2) AS avg_score "+
+			"FROM sleep_sessions "+
+			"WHERE app_id = ? AND user_id = ? AND room_temp IS NOT NULL AND room_temp != '' "+
+			"AND deleted_at IS NULL "+
+			"GROUP BY room_temp HAVING COUNT(*) >= 3",
+		appID, userID,
+	).Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("temp correlation: %w", err)
+	}
+
+	m := make(map[string]float64, len(rows))
+	for _, r := range rows {
+		m[r.RoomTemp] = r.AvgScore
+	}
+	return &TempCorrelationResponse{Correlations: m}, nil
+}
+
+// GetCBTIInsights analyzes the user's sleep sessions and returns clinically-validated
+// CBT-I recommendations based on their pattern. Pure Go math, no AI.
+func (s *SleepService) GetCBTIInsights(appID string, userID uuid.UUID) (*CBTIInsightsResponse, error) {
+	// Fetch enough sessions for meaningful analysis
+	var sessions []SleepSession
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ?", userID).
+		Order("created_at DESC").
+		Limit(30).
+		Find(&sessions).Error; err != nil {
+		return nil, fmt.Errorf("fetch sessions: %w", err)
+	}
+
+	resp := &CBTIInsightsResponse{Recommendations: []CBTIRecommendation{}}
+
+	if len(sessions) < 3 {
+		return resp, nil
+	}
+
+	var totalInBed, totalEff, totalLatency float64
+	n := float64(len(sessions))
+
+	for _, sess := range sessions {
+		totalInBed += float64(sess.DurationMinutes)
+		totalEff += sess.Efficiency
+		totalLatency += float64(sess.LatencyMinutes)
+	}
+
+	avgInBedMinutes := totalInBed / n
+	avgEff := totalEff / n
+	avgLatency := totalLatency / n
+
+	// 1. Sleep restriction check
+	// If avg time in bed > 480 min (8h) AND avg efficiency < 75%
+	if avgInBedMinutes > 480 && avgEff < 75.0 {
+		resp.Recommendations = append(resp.Recommendations, CBTIRecommendation{
+			Type:     "restrict_bed_time",
+			Message:  "Research shows going to bed 30 minutes later improves deep sleep quality for people with your pattern.",
+			Evidence: "Sleep restriction therapy (Spielman 1987) is a first-line CBT-I technique.",
+		})
+	}
+
+	// 2. Stimulus control check
+	// If avg sleep onset latency > 30 min AND at least 7 sessions logged
+	if avgLatency > 30.0 && len(sessions) >= 7 {
+		resp.Recommendations = append(resp.Recommendations, CBTIRecommendation{
+			Type:     "stimulus_control",
+			Message:  "Only go to bed when genuinely sleepy. This trains your brain to associate bed with sleep.",
+			Evidence: "Stimulus control therapy (Bootzin 1972) reduces sleep-onset latency in insomnia.",
+		})
+	}
+
+	// 3. Orthosomnia check
+	// If user has 14+ sessions AND score variance is high (std dev > 15)
+	if len(sessions) >= 14 {
+		var totalScore float64
+		for _, sess := range sessions {
+			totalScore += float64(sess.Score)
+		}
+		avgScore := totalScore / n
+		var varianceSum float64
+		for _, sess := range sessions {
+			d := float64(sess.Score) - avgScore
+			varianceSum += d * d
+		}
+		stdDev := math.Sqrt(varianceSum / n)
+
+		if stdDev > 15 {
+			resp.Recommendations = append(resp.Recommendations, CBTIRecommendation{
+				Type:     "tracker_break",
+				Message:  "You're tracking consistently — consider a 7-day score-free period to focus on how you feel, not the number.",
+				Evidence: "Orthosomnia (excessive sleep tracking anxiety) can worsen sleep quality (Baron et al. 2017).",
+			})
+		}
+	}
+
+	return resp, nil
 }
