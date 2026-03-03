@@ -32,8 +32,13 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 	resp, err := h.authService.Register(appID, &req)
 	if err != nil {
 		if errors.Is(err, services.ErrEmailTaken) {
-			return c.Status(fiber.StatusConflict).JSON(dto.ErrorResponse{
-				Error: true, Message: err.Error(),
+			// Return 201 with a generic message instead of 409 to prevent email enumeration.
+			// A 409 "email already registered" response tells an attacker exactly which
+			// emails have accounts (OWASP A07 Identification and Authentication Failures).
+			// The client shows the same "account created" UI regardless; legitimate users
+			// who already have accounts will discover this on their next login attempt.
+			return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+				"message": "Registration processed. Check your email to continue.",
 			})
 		}
 		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{

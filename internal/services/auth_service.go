@@ -171,10 +171,21 @@ func (s *AuthService) Refresh(appID string, req *dto.RefreshRequest) (*dto.AuthR
 		return nil, ErrInvalidToken
 	}
 
-	// Revoke the current token (rotation)
-	if err := s.db.Model(&stored).Update("revoked", true).Error; err != nil {
-		slog.Error("failed to revoke refresh token during rotation", "token_id", stored.ID, "error", err)
-		return nil, fmt.Errorf("failed to rotate refresh token: %w", err)
+	// Atomically revoke the token only if it is still unrevoked.
+	// Without the WHERE clause, two concurrent refresh requests for the same token
+	// can both pass the stored.Revoked guard above and both issue new tokens (TOCTOU race).
+	// PostgreSQL's row-level locking ensures only one UPDATE wins; the other gets RowsAffected=0.
+	result := s.db.Model(&models.RefreshToken{}).
+		Where("id = ? AND revoked = false", stored.ID).
+		Update("revoked", true)
+	if result.Error != nil {
+		slog.Error("failed to revoke refresh token during rotation", "token_id", stored.ID, "error", result.Error)
+		return nil, fmt.Errorf("failed to rotate refresh token: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		// Another concurrent request already revoked this token — treat as reuse.
+		slog.Warn("refresh token rotation race detected", "token_id", stored.ID, "app_id", appID)
+		return nil, ErrInvalidToken
 	}
 
 	var user models.User
@@ -247,7 +258,7 @@ func (s *AuthService) AppleSignIn(appID string, bundleID string, req *dto.AppleS
 		return nil, errors.New("identity token is required")
 	}
 
-	claims, err := s.appleJWKS.VerifyToken(req.IdentityToken, bundleID)
+	claims, err := s.appleJWKS.VerifyToken(req.IdentityToken, bundleID, req.Nonce)
 	if err != nil {
 		slog.Error("apple token verification failed", "error", err, "app_id", appID)
 		return nil, fmt.Errorf("failed to verify Apple identity token: %w", err)

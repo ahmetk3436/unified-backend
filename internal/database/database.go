@@ -47,6 +47,7 @@ func MigrateShared() error {
 		&models.Block{},
 		&models.SystemLog{},
 		&models.RemoteConfig{},
+		&models.ProcessedWebhookEvent{},
 	)
 }
 
