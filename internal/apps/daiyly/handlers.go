@@ -2,6 +2,7 @@ package daiyly
 
 import (
 	"errors"
+	"log/slog"
 	"strconv"
 
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/dto"
@@ -46,6 +47,7 @@ func (h *JournalHandler) Search(c *fiber.Ctx) error {
 
 	response, err := h.service.SearchEntries(appID, userID, query, limit, offset)
 	if err != nil {
+		slog.Error("search entries failed", "app", appID, "user", userID, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
 			Error: true, Message: err.Error(),
 		})
@@ -80,6 +82,7 @@ func (h *JournalHandler) Create(c *fiber.Ctx) error {
 				Error: true, Message: err.Error(),
 			})
 		}
+		slog.Error("create journal entry failed", "app", appID, "user", userID, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
 			Error: true, Message: "Failed to create journal entry",
 		})
@@ -105,6 +108,7 @@ func (h *JournalHandler) List(c *fiber.Ctx) error {
 
 	entries, total, err := h.service.GetEntries(appID, userID, limit, offset)
 	if err != nil {
+		slog.Error("list journal entries failed", "app", appID, "user", userID, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
 			Error: true, Message: "Failed to fetch journal entries",
 		})
@@ -146,6 +150,7 @@ func (h *JournalHandler) Get(c *fiber.Ctx) error {
 				Error: true, Message: err.Error(),
 			})
 		}
+		slog.Error("get journal entry failed", "app", appID, "user", userID, "entry", entryID, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
 			Error: true, Message: "Failed to fetch journal entry",
 		})
@@ -197,6 +202,7 @@ func (h *JournalHandler) Update(c *fiber.Ctx) error {
 				Error: true, Message: err.Error(),
 			})
 		}
+		slog.Error("update journal entry failed", "app", appID, "user", userID, "entry", entryID, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
 			Error: true, Message: "Failed to update journal entry",
 		})
@@ -233,6 +239,7 @@ func (h *JournalHandler) Delete(c *fiber.Ctx) error {
 				Error: true, Message: err.Error(),
 			})
 		}
+		slog.Error("delete journal entry failed", "app", appID, "user", userID, "entry", entryID, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
 			Error: true, Message: "Failed to delete journal entry",
 		})
@@ -254,6 +261,7 @@ func (h *JournalHandler) GetStreak(c *fiber.Ctx) error {
 
 	streak, err := h.service.GetStreak(appID, userID)
 	if err != nil {
+		slog.Error("get streak failed", "app", appID, "user", userID, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
 			Error: true, Message: "Failed to fetch streak",
 		})
@@ -273,6 +281,7 @@ func (h *JournalHandler) GetWeeklyInsights(c *fiber.Ctx) error {
 
 	insights, err := h.service.GetWeeklyInsights(appID, userID)
 	if err != nil {
+		slog.Error("get weekly insights failed", "app", appID, "user", userID, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
 			Error: true, Message: "Failed to fetch weekly insights",
 		})
@@ -292,6 +301,7 @@ func (h *JournalHandler) GetPrompts(c *fiber.Ctx) error {
 
 	prompts, err := h.service.GetPersonalizedPrompts(appID, userID)
 	if err != nil {
+		slog.Error("get prompts failed", "app", appID, "user", userID, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
 			Error: true, Message: "Failed to generate prompts",
 		})
@@ -312,6 +322,7 @@ func (h *JournalHandler) GetWeeklyReport(c *fiber.Ctx) error {
 	forceRefresh := c.Query("refresh") == "true"
 	report, err := h.service.GetWeeklyReport(appID, userID, forceRefresh)
 	if err != nil {
+		slog.Error("get weekly report failed", "app", appID, "user", userID, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
 			Error: true, Message: "Failed to generate weekly report",
 		})
@@ -331,6 +342,7 @@ func (h *JournalHandler) GetFlashbacks(c *fiber.Ctx) error {
 
 	flashbacks, err := h.service.GetFlashbacks(appID, userID)
 	if err != nil {
+		slog.Error("get flashbacks failed", "app", appID, "user", userID, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
 			Error: true, Message: "Failed to fetch flashbacks",
 		})
@@ -350,6 +362,7 @@ func (h *JournalHandler) GetNotificationConfig(c *fiber.Ctx) error {
 
 	config, err := h.service.GetNotificationConfig(appID, userID)
 	if err != nil {
+		slog.Error("get notification config failed", "app", appID, "user", userID, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
 			Error: true, Message: "Failed to generate notification config",
 		})
@@ -386,12 +399,14 @@ func (h *JournalHandler) AnalyzeEntry(c *fiber.Ctx) error {
 				Error: true, Message: err.Error(),
 			})
 		}
+		slog.Error("verify entry for analysis failed", "app", appID, "user", userID, "entry", entryID, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
 			Error: true, Message: "Failed to verify entry",
 		})
 	}
 
 	if err := h.service.TriggerAnalysis(appID, userID, entryID); err != nil {
+		slog.Error("trigger analysis failed", "app", appID, "user", userID, "entry", entryID, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
 			Error: true, Message: "Failed to trigger analysis",
 		})
@@ -425,6 +440,7 @@ func (h *JournalHandler) GetEntryAnalysis(c *fiber.Ctx) error {
 				Error: true, Message: "Analysis not available yet",
 			})
 		}
+		slog.Error("get entry analysis failed", "app", appID, "user", userID, "entry", entryID, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
 			Error: true, Message: "Failed to fetch analysis",
 		})

@@ -60,6 +60,7 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 				Error: true, Message: err.Error(),
 			})
 		}
+		slog.Error("login failed", "app", appID, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
 			Error: true, Message: "Internal server error",
 		})
@@ -84,6 +85,7 @@ func (h *AuthHandler) Refresh(c *fiber.Ctx) error {
 				Error: true, Message: err.Error(),
 			})
 		}
+		slog.Error("token refresh failed", "app", appID, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
 			Error: true, Message: "Internal server error",
 		})
@@ -144,6 +146,7 @@ func (h *AuthHandler) DeleteAccount(c *fiber.Ctx) error {
 				Error: true, Message: "Password is required",
 			})
 		}
+		slog.Error("delete account failed", "app", appID, "user", userID, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
 			Error: true, Message: "Failed to delete account",
 		})
