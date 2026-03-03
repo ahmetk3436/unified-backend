@@ -52,6 +52,9 @@ type Config struct {
 
 	// App registry
 	AppsConfigPath string
+
+	// File uploads root directory (absolute path preferred; defaults to ./uploads)
+	UploadsRoot string
 }
 
 func Load() *Config {
@@ -97,6 +100,8 @@ func Load() *Config {
 		ApplePrivateKey: getEnv("APPLE_PRIVATE_KEY", ""),
 
 		AppsConfigPath: getEnv("APPS_CONFIG_PATH", "apps.json"),
+
+		UploadsRoot: getEnv("UPLOADS_ROOT", "./uploads"),
 	}
 }
 

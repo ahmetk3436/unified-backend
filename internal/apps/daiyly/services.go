@@ -127,11 +127,11 @@ func (s *JournalService) CreateEntry(appID string, userID uuid.UUID, req CreateJ
 		}
 	}
 
-	if !isValidPhotoURL(req.PhotoURL) {
+	if !isValidStorageURL(req.PhotoURL) {
 		return nil, ErrInvalidPhotoURL
 	}
 
-	if !isValidPhotoURL(req.AudioURL) {
+	if !isValidStorageURL(req.AudioURL) {
 		return nil, ErrInvalidAudioURL
 	}
 
@@ -294,14 +294,14 @@ func (s *JournalService) UpdateEntry(appID string, userID uuid.UUID, entryID uui
 	}
 
 	if req.PhotoURL != nil {
-		if !isValidPhotoURL(*req.PhotoURL) {
+		if !isValidStorageURL(*req.PhotoURL) {
 			return nil, ErrInvalidPhotoURL
 		}
 		entry.PhotoURL = *req.PhotoURL
 	}
 
 	if req.AudioURL != nil {
-		if !isValidPhotoURL(*req.AudioURL) {
+		if !isValidStorageURL(*req.AudioURL) {
 			return nil, ErrInvalidAudioURL
 		}
 		entry.AudioURL = *req.AudioURL
@@ -581,10 +581,11 @@ func isValidCardColor(color string) bool {
 	return false
 }
 
-// isValidPhotoURL accepts empty values (field is optional) and requires https:// scheme
+// isValidStorageURL accepts empty values (field is optional) and requires https:// scheme
 // and a maximum length of 2048 chars. This prevents: (1) excessively long URLs being
 // stored in the DB, (2) http:// URLs that would cause mixed-content on the client.
-func isValidPhotoURL(url string) bool {
+// Used for both photo_url and audio_url fields.
+func isValidStorageURL(url string) bool {
 	if url == "" {
 		return true
 	}
@@ -593,6 +594,10 @@ func isValidPhotoURL(url string) bool {
 	}
 	return strings.HasPrefix(url, "https://")
 }
+
+// isValidPhotoURL is an alias kept for backward compatibility.
+// New callers should use isValidStorageURL.
+func isValidPhotoURL(url string) bool { return isValidStorageURL(url) }
 
 // --- OpenAI Integration ---
 
@@ -1867,7 +1872,9 @@ func (s *JournalService) AISearchEntries(appID string, userID uuid.UUID, query s
 
 	var ids []string
 	if parseErr := json.Unmarshal([]byte(rawContent), &ids); parseErr != nil {
-		slog.Warn("[daiyly] ai-search: failed to parse ids", "raw", rawContent, "error", parseErr)
+		// Do NOT log rawContent — it is a model-generated string and may contain
+		// any text the model decided to produce (potentially reflecting user content).
+		slog.Warn("[daiyly] ai-search: failed to parse id array from model response", "error", parseErr)
 		return &AISearchResponse{Query: query, Results: []AISearchResult{}, Total: 0}, nil
 	}
 
@@ -1925,14 +1932,26 @@ func (s *JournalService) AskJournal(appID string, userID uuid.UUID, question str
 		}, nil
 	}
 
+	// Hard cap total characters sent to OpenAI to bound token costs.
+	// 200 entries × 400 chars each = 80 000 chars ≈ 20 000 tokens at $0.15/1M input.
+	// Cap at 50 000 chars (~12 500 tokens) which covers ~125 full entries.
+	const askMaxChars = 50_000
 	var sb strings.Builder
 	for _, e := range entries {
+		if sb.Len() >= askMaxChars {
+			break
+		}
 		preview := e.Content
 		if len(preview) > 400 {
 			preview = preview[:400] + "..."
 		}
-		sb.WriteString(fmt.Sprintf("[%s] MoodScore:%d %s — %s\n",
-			e.EntryDate.Format("2006-01-02"), e.MoodScore, e.MoodEmoji, preview))
+		line := fmt.Sprintf("[%s] MoodScore:%d %s — %s\n",
+			e.EntryDate.Format("2006-01-02"), e.MoodScore, e.MoodEmoji, preview)
+		// Stop adding entries once the cap is reached to avoid partial mid-sentence cutoffs.
+		if sb.Len()+len(line) > askMaxChars {
+			break
+		}
+		sb.WriteString(line)
 	}
 
 	systemPrompt := `You are an AI that has read all of a user's journal entries. Answer their question about their own journal truthfully and concisely. Base your answer only on the journal entries provided. At the end of your answer, on its own line, include a JSON object with any dates you referenced: {"referenced_dates":["2026-02-15","2026-02-20"]}. If no specific dates are referenced use an empty array.`

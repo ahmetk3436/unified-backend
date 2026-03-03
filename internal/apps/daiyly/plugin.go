@@ -96,11 +96,53 @@ func (p *DaiylyPlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *con
 	router.Get("/journals/ai-search", aiLightLimiter, handler.AISearch)
 	router.Post("/journals/ask", aiLightLimiter, handler.AskJournal)
 
+	// Per-user rate limiters for upload endpoints.
+	// Photo: 20 uploads/hour — prevents disk exhaustion from a single authenticated user.
+	// Transcribe: 10/hour — each call proxies to paid Whisper API (cost control + disk).
+	uploadPhotoLimiter := limiter.New(limiter.Config{
+		Max:               20,
+		Expiration:        1 * time.Hour,
+		LimiterMiddleware: limiter.SlidingWindow{},
+		KeyGenerator: func(c *fiber.Ctx) string {
+			auth := c.Get("Authorization")
+			if len(auth) > 39 {
+				return "upload_photo:" + auth[7:39]
+			}
+			return "upload_photo:ip:" + c.IP()
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+				"error":   true,
+				"message": "Upload rate limit exceeded. Please try again in an hour.",
+			})
+		},
+	})
+	transcribeLimiter := limiter.New(limiter.Config{
+		Max:               10,
+		Expiration:        1 * time.Hour,
+		LimiterMiddleware: limiter.SlidingWindow{},
+		KeyGenerator: func(c *fiber.Ctx) string {
+			auth := c.Get("Authorization")
+			if len(auth) > 39 {
+				return "transcribe:" + auth[7:39]
+			}
+			return "transcribe:ip:" + c.IP()
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+				"error":   true,
+				"message": "Transcription rate limit exceeded. Please try again in an hour.",
+			})
+		},
+	})
+
 	// Upload routes — photo storage and audio transcription (MUST come before :id catch-all).
-	// Protected by JWT (upstream middleware). Global 60 req/min applies.
-	uploadHandler := NewUploadHandler(cfg.OpenAIAPIKey, cfg.AITimeout, "./uploads")
-	router.Post("/journals/upload-photo", uploadHandler.UploadPhoto)
-	router.Post("/journals/transcribe", uploadHandler.Transcribe)
+	// Protected by JWT (upstream middleware) + per-user rate limiters above.
+	// Use cfg.UploadsRoot (set via UPLOADS_ROOT env var) so the path is correct
+	// regardless of the process working directory. Defaults to "./uploads".
+	uploadHandler := NewUploadHandler(cfg.OpenAIAPIKey, cfg.AITimeout, cfg.UploadsRoot)
+	router.Post("/journals/upload-photo", uploadPhotoLimiter, uploadHandler.UploadPhoto)
+	router.Post("/journals/transcribe", transcribeLimiter, uploadHandler.Transcribe)
 
 	// Parameterized routes (MUST be last)
 	router.Get("/journals/:id", handler.Get)
