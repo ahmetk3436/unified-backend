@@ -11,9 +11,10 @@ func CORS(cfg *config.Config) fiber.Handler {
 	// This backend is mobile-only — no browser client. Restrict to a no-match
 	// origin so browsers cannot make arbitrary cross-origin requests.
 	// Mobile SDK clients do not send an Origin header and are unaffected.
+	// Note: "null" is not a valid Fiber origin format — use .invalid TLD (RFC 2606).
 	origins := cfg.CORSOrigins
 	if origins == "" {
-		origins = "null" // Matches no real origin; denies browser cross-origin access.
+		origins = "https://no-origin.invalid"
 	}
 	return cors.New(cors.Config{
 		AllowOrigins:     origins,
