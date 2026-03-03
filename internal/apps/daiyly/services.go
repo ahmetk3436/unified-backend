@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -20,6 +21,7 @@ var (
 	ErrInvalidMoodEmoji     = errors.New("invalid mood emoji")
 	ErrInvalidMoodScore     = errors.New("mood score must be between 1 and 100")
 	ErrInvalidCardColor     = errors.New("invalid card color")
+	ErrInvalidPhotoURL      = errors.New("photo_url must be an https:// URL of at most 2048 characters")
 	ErrJournalNotFound      = errors.New("journal entry not found")
 	ErrNotOwner             = errors.New("you do not own this journal entry")
 	ErrContentInappropriate = errors.New("content contains inappropriate language")
@@ -109,6 +111,10 @@ func (s *JournalService) CreateEntry(appID string, userID uuid.UUID, req CreateJ
 				entryDate = parsed
 			}
 		}
+	}
+
+	if !isValidPhotoURL(req.PhotoURL) {
+		return nil, ErrInvalidPhotoURL
 	}
 
 	entry := JournalEntry{
@@ -264,6 +270,9 @@ func (s *JournalService) UpdateEntry(appID string, userID uuid.UUID, entryID uui
 	}
 
 	if req.PhotoURL != nil {
+		if !isValidPhotoURL(*req.PhotoURL) {
+			return nil, ErrInvalidPhotoURL
+		}
 		entry.PhotoURL = *req.PhotoURL
 	}
 
@@ -508,6 +517,19 @@ func isValidCardColor(color string) bool {
 	return false
 }
 
+// isValidPhotoURL accepts empty values (field is optional) and requires https:// scheme
+// and a maximum length of 2048 chars. This prevents: (1) excessively long URLs being
+// stored in the DB, (2) http:// URLs that would cause mixed-content on the client.
+func isValidPhotoURL(url string) bool {
+	if url == "" {
+		return true
+	}
+	if len(url) > 2048 {
+		return false
+	}
+	return strings.HasPrefix(url, "https://")
+}
+
 // --- OpenAI Integration ---
 
 type openAIChatRequest struct {
@@ -561,7 +583,7 @@ func (s *JournalService) callOpenAI(systemPrompt, userPrompt string) (string, er
 	}
 
 	var chatResp openAIChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&chatResp); err != nil {
 		return "", fmt.Errorf("decode response: %w", err)
 	}
 	if len(chatResp.Choices) == 0 {

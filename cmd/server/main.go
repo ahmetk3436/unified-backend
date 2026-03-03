@@ -128,11 +128,14 @@ func main() {
 			EnableTracing:    true,
 			TracesSampleRate: 0.2,
 			Environment:      os.Getenv("APP_ENV"),
-			// Scrub request body from error events to prevent passwords/tokens
-			// from being transmitted to Sentry (OWASP A02 data exposure).
+			// Scrub request body and URL from error events. The URL path alone
+			// (e.g., /api/p/journals/uuid) reveals access to a health-data endpoint,
+			// which qualifies as covered health data under FTC HBNR 2024.
 			BeforeSend: func(event *sentry.Event, hint *sentry.EventHint) *sentry.Event {
 				if event.Request != nil {
 					event.Request.Data = "[scrubbed]"
+					event.Request.URL = "[scrubbed]"
+					event.Request.QueryString = "[scrubbed]"
 				}
 				return event
 			},

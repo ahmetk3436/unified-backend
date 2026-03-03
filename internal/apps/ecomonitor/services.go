@@ -134,9 +134,9 @@ func (s *CoordinateService) List(appID string, userID uuid.UUID, page, limit int
 	return resp, nil
 }
 
-func (s *CoordinateService) Get(appID string, id uuid.UUID) (*CoordinateResponse, error) {
+func (s *CoordinateService) Get(appID string, id, userID uuid.UUID) (*CoordinateResponse, error) {
 	var coord Coordinate
-	if err := s.db.Scopes(tenant.ForTenant(appID)).First(&coord, "id = ?", id).Error; err != nil {
+	if err := s.db.Scopes(tenant.ForTenant(appID)).First(&coord, "id = ? AND user_id = ?", id, userID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrCoordinateNotFound
 		}
@@ -178,7 +178,7 @@ func (s *CoordinateService) Update(appID string, id, userID uuid.UUID, req *Upda
 	}
 
 	if len(updates) == 0 {
-		return s.Get(appID, id)
+		return s.Get(appID, id, userID)
 	}
 
 	result := s.db.Model(&Coordinate{}).Scopes(tenant.ForTenant(appID)).Where("id = ? AND user_id = ?", id, userID).Updates(updates)
@@ -189,7 +189,7 @@ func (s *CoordinateService) Update(appID string, id, userID uuid.UUID, req *Upda
 		return nil, ErrCoordinateNotFound
 	}
 
-	return s.Get(appID, id)
+	return s.Get(appID, id, userID)
 }
 
 func (s *CoordinateService) Delete(appID string, id, userID uuid.UUID) error {
@@ -313,7 +313,7 @@ Provide 1-4 realistic entries. Return ONLY valid JSON.`, coord.Latitude, coord.L
 	}
 
 	var oaiResp openAIResponse
-	if err := json.NewDecoder(httpResp.Body).Decode(&oaiResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(httpResp.Body, 1<<20)).Decode(&oaiResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 	if len(oaiResp.Choices) == 0 {
@@ -387,7 +387,7 @@ Provide 1-4 realistic entries. Return ONLY valid JSON.`, coord.Latitude, coord.L
 	return results, nil
 }
 
-func (s *SatelliteService) GetAnalysis(appID string, coordinateID uuid.UUID, page, limit int) (*PaginatedSatelliteResponse, error) {
+func (s *SatelliteService) GetAnalysis(appID string, coordinateID, userID uuid.UUID, page, limit int) (*PaginatedSatelliteResponse, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -395,6 +395,16 @@ func (s *SatelliteService) GetAnalysis(appID string, coordinateID uuid.UUID, pag
 		limit = 10
 	}
 	offset := (page - 1) * limit
+
+	// Verify the coordinate belongs to this user before exposing analysis data.
+	var coordExists int64
+	if err := s.db.Model(&Coordinate{}).Scopes(tenant.ForTenant(appID)).
+		Where("id = ? AND user_id = ?", coordinateID, userID).Count(&coordExists).Error; err != nil {
+		return nil, err
+	}
+	if coordExists == 0 {
+		return nil, ErrCoordinateNotFound
+	}
 
 	var totalCount int64
 	query := s.db.Model(&SatelliteData{}).Scopes(tenant.ForTenant(appID)).Where("coordinate_id = ?", coordinateID)

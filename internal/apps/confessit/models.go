@@ -83,3 +83,11 @@ var ConfessionMoods = []string{
 	"happy", "sad", "anxious", "relieved",
 	"guilty", "excited", "confused", "peaceful",
 }
+
+// AllowedReactionEmojis is the complete set of emojis accepted by ReactToConfession.
+// Arbitrary Unicode submission would allow injection of oversized multi-codepoint sequences.
+var AllowedReactionEmojis = map[string]bool{
+	"❤️": true, "😂": true, "😮": true, "😢": true,
+	"😡": true, "👍": true, "👎": true, "🔥": true,
+	"🙏": true, "💯": true,
+}

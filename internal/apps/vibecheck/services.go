@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"net/http"
 	"strings"
@@ -229,7 +230,7 @@ func (s *VibeService) analyzeWithAI(moodText string) aiAnalysisResult {
 	}
 
 	var chatResp openAIChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&chatResp); err != nil {
 		return s.fallbackAnalyze(moodText)
 	}
 	if len(chatResp.Choices) == 0 {

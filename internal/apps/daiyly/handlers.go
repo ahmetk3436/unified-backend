@@ -52,7 +52,7 @@ func (h *JournalHandler) Search(c *fiber.Ctx) error {
 	if err != nil {
 		slog.Error("search entries failed", "app", appID, "user", userID, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
-			Error: true, Message: err.Error(),
+			Error: true, Message: "search failed",
 		})
 	}
 
@@ -80,6 +80,7 @@ func (h *JournalHandler) Create(c *fiber.Ctx) error {
 		if errors.Is(err, ErrInvalidMoodEmoji) ||
 			errors.Is(err, ErrInvalidMoodScore) ||
 			errors.Is(err, ErrInvalidCardColor) ||
+			errors.Is(err, ErrInvalidPhotoURL) ||
 			errors.Is(err, ErrContentInappropriate) {
 			return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
 				Error: true, Message: err.Error(),
@@ -206,6 +207,7 @@ func (h *JournalHandler) Update(c *fiber.Ctx) error {
 		if errors.Is(err, ErrInvalidMoodEmoji) ||
 			errors.Is(err, ErrInvalidMoodScore) ||
 			errors.Is(err, ErrInvalidCardColor) ||
+			errors.Is(err, ErrInvalidPhotoURL) ||
 			errors.Is(err, ErrContentInappropriate) {
 			return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
 				Error: true, Message: err.Error(),

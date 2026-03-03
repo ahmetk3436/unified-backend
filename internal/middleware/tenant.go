@@ -46,7 +46,7 @@ func TenantMiddleware(registry *tenant.Registry) fiber.Handler {
 			if !registry.Exists(appID) {
 				return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
 					Error:   true,
-					Message: "Invalid X-App-ID: " + appID,
+					Message: "Invalid or missing X-App-ID",
 				})
 			}
 			c.Locals("app_id", appID)
@@ -59,7 +59,7 @@ func TenantMiddleware(registry *tenant.Registry) fiber.Handler {
 			if !registry.Exists(appID) {
 				return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
 					Error:   true,
-					Message: "Invalid app_id: " + appID,
+					Message: "Invalid or missing X-App-ID",
 				})
 			}
 			c.Locals("app_id", appID)

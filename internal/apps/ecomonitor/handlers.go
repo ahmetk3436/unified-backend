@@ -77,12 +77,17 @@ func (h *CoordinateHandler) ListCoordinates(c *fiber.Ctx) error {
 
 func (h *CoordinateHandler) GetCoordinate(c *fiber.Ctx) error {
 	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(ErrorResponse{Error: true, Message: "Unauthorized"})
+	}
+
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{Error: true, Message: "Invalid coordinate ID"})
 	}
 
-	coord, err := h.coordService.Get(appID, id)
+	coord, err := h.coordService.Get(appID, id, userID)
 	if err != nil {
 		if errors.Is(err, ErrCoordinateNotFound) {
 			return c.Status(fiber.StatusNotFound).JSON(ErrorResponse{Error: true, Message: err.Error()})
@@ -193,6 +198,11 @@ func (h *SatelliteHandler) GenerateAnalysis(c *fiber.Ctx) error {
 
 func (h *SatelliteHandler) GetAnalysis(c *fiber.Ctx) error {
 	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(ErrorResponse{Error: true, Message: "Unauthorized"})
+	}
+
 	coordinateID, err := uuid.Parse(c.Params("id"))
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{Error: true, Message: "Invalid coordinate ID"})
@@ -207,8 +217,11 @@ func (h *SatelliteHandler) GetAnalysis(c *fiber.Ctx) error {
 		limit = 10
 	}
 
-	results, err := h.satelliteService.GetAnalysis(appID, coordinateID, page, limit)
+	results, err := h.satelliteService.GetAnalysis(appID, coordinateID, userID, page, limit)
 	if err != nil {
+		if errors.Is(err, ErrCoordinateNotFound) {
+			return c.Status(fiber.StatusNotFound).JSON(ErrorResponse{Error: true, Message: "Coordinate not found"})
+		}
 		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: true, Message: "Failed to fetch analysis"})
 	}
 

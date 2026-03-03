@@ -77,13 +77,16 @@ func (s *PaletteService) GetUserPalettes(appID string, userID uuid.UUID, limit, 
 	return palettes, total, nil
 }
 
-func (s *PaletteService) GetPaletteByID(appID string, id uuid.UUID) (*Palette, error) {
+func (s *PaletteService) GetPaletteByID(appID string, id, userID uuid.UUID) (*Palette, error) {
 	var palette Palette
 	if err := s.db.Scopes(tenant.ForTenant(appID)).First(&palette, "id = ?", id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrPaletteNotFound
 		}
 		return nil, fmt.Errorf("failed to fetch palette: %w", err)
+	}
+	if palette.UserID != userID {
+		return nil, ErrNotOwner
 	}
 	return &palette, nil
 }

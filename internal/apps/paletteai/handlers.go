@@ -115,6 +115,13 @@ func (h *PaletteHandler) ListPalettes(c *fiber.Ctx) error {
 // GetPalette handles GET /palettes/:id
 func (h *PaletteHandler) GetPalette(c *fiber.Ctx) error {
 	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
 	id, err := uuid.Parse(c.Params("id"))
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(dto.ErrorResponse{
@@ -122,9 +129,9 @@ func (h *PaletteHandler) GetPalette(c *fiber.Ctx) error {
 		})
 	}
 
-	palette, err := h.paletteService.GetPaletteByID(appID, id)
+	palette, err := h.paletteService.GetPaletteByID(appID, id, userID)
 	if err != nil {
-		if errors.Is(err, ErrPaletteNotFound) {
+		if errors.Is(err, ErrPaletteNotFound) || errors.Is(err, ErrNotOwner) {
 			return c.Status(fiber.StatusNotFound).JSON(dto.ErrorResponse{
 				Error: true, Message: "Palette not found",
 			})

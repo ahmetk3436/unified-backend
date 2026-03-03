@@ -225,6 +225,9 @@ func (s *ConfessionService) ReactToConfession(appID string, userID, confessionID
 	if emoji == "" {
 		return errors.New("emoji is required")
 	}
+	if !AllowedReactionEmojis[emoji] {
+		return errors.New("invalid reaction emoji")
+	}
 
 	var confession Confession
 	if err := s.db.Scopes(tenant.ForTenant(appID)).Where("id = ?", confessionID).First(&confession).Error; err != nil {
