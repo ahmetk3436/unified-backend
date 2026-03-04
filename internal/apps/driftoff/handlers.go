@@ -519,46 +519,22 @@ func (h *SleepHandler) GetAlertnessLogs(c *fiber.Ctx) error {
 	return c.JSON(resp)
 }
 
-// GetNapOptimizer handles GET /sleeps/nap-optimizer
-func (h *SleepHandler) GetNapOptimizer(c *fiber.Ctx) error {
-	appID := c.Locals("app_id").(string)
-	userID := c.Locals("user_id").(uuid.UUID)
-	result, err := h.svc.GetNapOptimizer(appID, userID)
+// GetSnoringAnalysis handles GET /sleeps/snoring-analysis
+// Returns snoring correlation with sleep score across the last 30 sessions (min 3 required).
+func (h *SleepHandler) GetSnoringAnalysis(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
 	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "could not compute nap optimizer"})
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
 	}
-	return c.JSON(result)
-}
 
-// CreateDream handles POST /sleeps/dream
-func (h *SleepHandler) CreateDream(c *fiber.Ctx) error {
-	appID := c.Locals("app_id").(string)
-	userID := c.Locals("user_id").(uuid.UUID)
-	var req CreateDreamRequest
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": "invalid body"})
-	}
-	dream, err := h.svc.CreateDream(appID, userID, req)
+	resp, err := h.svc.GetSnoringAnalysis(appID, userID)
 	if err != nil {
-		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		if err.Error() == "not enough data" {
+			return fiber.NewError(fiber.StatusUnprocessableEntity, "not enough data: need 3+ sessions")
+		}
+		return fiber.NewError(fiber.StatusInternalServerError, "snoring analysis unavailable")
 	}
-	return c.Status(201).JSON(dream)
-}
 
-// ListDreams handles GET /sleeps/dreams
-func (h *SleepHandler) ListDreams(c *fiber.Ctx) error {
-	appID := c.Locals("app_id").(string)
-	userID := c.Locals("user_id").(uuid.UUID)
-	days, _ := strconv.Atoi(c.Query("days", "30"))
-	if days < 1 {
-		days = 30
-	}
-	if days > 365 {
-		days = 365
-	}
-	result, err := h.svc.ListDreams(appID, userID, days)
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "storage error"})
-	}
-	return c.JSON(result)
+	return c.JSON(resp)
 }

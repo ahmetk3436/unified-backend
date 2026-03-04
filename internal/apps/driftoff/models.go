@@ -226,6 +226,27 @@ type TempCorrelationResponse struct {
 	NightCount   int                `json:"night_count"`  // total sessions with a room_temp logged
 }
 
+// --- Snoring Analysis ---
+
+type SnoringAnalysisResponse struct {
+	TotalSessions          int            `json:"total_sessions"`
+	SessionsWithSnoring    int            `json:"sessions_with_snoring"`
+	SnoringPct             float64        `json:"snoring_pct"`              // % sessions with detected snoring
+	AvgScoreWithSnoring    float64        `json:"avg_score_with_snoring"`
+	AvgScoreWithoutSnoring float64        `json:"avg_score_without_snoring"`
+	ScoreDiff              float64        `json:"score_diff"`               // without - with (positive = snoring hurts)
+	AvgDurationSecPerNight float64        `json:"avg_duration_sec_per_night"` // avg snoring duration on snoring nights
+	TrendNights            []SnoringNight `json:"trend_nights"`             // last 14 nights
+	Insight                string         `json:"insight"`
+}
+
+type SnoringNight struct {
+	Date            string `json:"date"`
+	HasSnoring      bool   `json:"has_snoring"`
+	SnoringDuration int    `json:"snoring_duration_sec"` // 0 if no snoring
+	SleepScore      int    `json:"sleep_score"`
+}
+
 // --- CBT-I Insights ---
 
 type CBTIRecommendation struct {
@@ -306,55 +327,7 @@ type AlertnessLogResponse struct {
 type AlertnessListResponse struct {
 	Logs        []AlertnessLogResponse `json:"logs"`
 	Days        int                    `json:"days"`
-	DailyAvg    float64                `json:"daily_avg"`   // average level over the period
-	PeakHour    int                    `json:"peak_hour"`   // hour of day (0-23) with highest avg level
-	TroughHour  int                    `json:"trough_hour"` // hour of day with lowest avg level
-}
-
-// --- Nap Optimizer ---
-
-type NapOptimizerResponse struct {
-	NapNeeded       bool    `json:"nap_needed"`
-	OptimalStart    string  `json:"optimal_start"`    // "14:00"
-	OptimalEnd      string  `json:"optimal_end"`      // "14:20"
-	DurationMinutes int     `json:"duration_minutes"` // 20 or 90
-	Reason          string  `json:"reason"`
-	ChronotypeHour  float64 `json:"chronotype_hour"` // avg bedtime hour (0-24)
-}
-
-// --- Dream Journal ---
-
-type DreamEntry struct {
-	ID        uuid.UUID  `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
-	AppID     string     `gorm:"size:50;not null;index" json:"app_id"`
-	UserID    uuid.UUID  `gorm:"type:uuid;not null;index" json:"user_id"`
-	SessionID *uuid.UUID `gorm:"type:uuid" json:"session_id,omitempty"` // optional linked sleep session
-	Text      string     `gorm:"type:text;not null" json:"text"`
-	Mood      string     `gorm:"size:20" json:"mood"` // scary/happy/neutral/peaceful/strange
-	Tags      string     `gorm:"type:jsonb;default:'[]'" json:"-"` // stored as JSON array
-	DreamDate string     `gorm:"size:10;not null;index" json:"dream_date"` // YYYY-MM-DD
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
-}
-
-type CreateDreamRequest struct {
-	Text      string   `json:"text"`       // required, max 5000 chars
-	Mood      string   `json:"mood"`       // optional
-	Tags      []string `json:"tags"`       // optional
-	DreamDate string   `json:"dream_date"` // YYYY-MM-DD, defaults to today
-	SessionID *string  `json:"session_id"` // optional
-}
-
-type DreamResponse struct {
-	ID        string   `json:"id"`
-	Text      string   `json:"text"`
-	Mood      string   `json:"mood"`
-	Tags      []string `json:"tags"`
-	DreamDate string   `json:"dream_date"`
-	CreatedAt string   `json:"created_at"`
-}
-
-type DreamListResponse struct {
-	Dreams []DreamResponse `json:"dreams"`
-	Total  int             `json:"total"`
+	DailyAvg    float64                `json:"daily_avg"`    // average level over the period
+	PeakHour    int                    `json:"peak_hour"`    // hour of day (0-23) with highest avg level
+	TroughHour  int                    `json:"trough_hour"`  // hour of day with lowest avg level
 }

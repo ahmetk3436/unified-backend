@@ -1730,163 +1730,140 @@ func (s *SleepService) GetAlertnessLogs(appID string, userID uuid.UUID, days int
 	return resp, nil
 }
 
-// GetNapOptimizer recommends whether the user needs a nap and when, based on their last sleep session.
-func (s *SleepService) GetNapOptimizer(appID string, userID uuid.UUID) (*NapOptimizerResponse, error) {
-	// Get last sleep session
-	var session SleepSession
-	if err := s.db.Scopes(tenant.ForTenant(appID)).
-		Where("user_id = ? AND deleted_at IS NULL", userID).
-		Order("created_at DESC").
-		First(&session).Error; err != nil {
-		return &NapOptimizerResponse{NapNeeded: false, Reason: "No sleep data yet"}, nil
+// GetSnoringAnalysis analyses snoring events stored in the sounds_json JSONB field
+// across the last 30 sleep sessions. Returns 422 if fewer than 3 sessions exist.
+func (s *SleepService) GetSnoringAnalysis(appID string, userID uuid.UUID) (*SnoringAnalysisResponse, error) {
+	type rawRow struct {
+		ID         string  `gorm:"column:id"`
+		Score      int     `gorm:"column:score"`
+		CreatedAt  string  `gorm:"column:created_at"`
+		SoundsJSON string  `gorm:"column:sounds_json"`
 	}
 
-	durationHours := float64(session.DurationMinutes) / 60.0
-	wakeHour := float64(session.WakeTime.Hour()) + float64(session.WakeTime.Minute())/60.0
+	var rows []rawRow
+	err := s.db.Raw(
+		"SELECT id, score, created_at::text, sounds_json FROM sleep_sessions "+
+			"WHERE app_id = ? AND user_id = ? AND deleted_at IS NULL "+
+			"ORDER BY created_at DESC LIMIT 30",
+		appID, userID,
+	).Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("snoring analysis query: %w", err)
+	}
 
-	// Get average bedtime from last 30 sessions for chronotype
-	var avgBedtimeHour float64
-	var sessions []SleepSession
-	s.db.Scopes(tenant.ForTenant(appID)).
-		Where("user_id = ? AND deleted_at IS NULL", userID).
-		Order("created_at DESC").Limit(30).Find(&sessions)
-	if len(sessions) > 0 {
-		var sumBedtimeMin float64
-		for _, sess := range sessions {
-			sumBedtimeMin += float64(sess.Bedtime.Hour()*60 + sess.Bedtime.Minute())
+	total := len(rows)
+	if total < 3 {
+		return nil, fmt.Errorf("not enough data")
+	}
+
+	type sessionData struct {
+		score           int
+		createdAt       time.Time
+		snoringDuration int
+		hasSnoring      bool
+	}
+
+	sessions := make([]sessionData, 0, total)
+	for _, r := range rows {
+		var sounds []SoundDTO
+		if r.SoundsJSON != "" && r.SoundsJSON != "[]" {
+			_ = json.Unmarshal([]byte(r.SoundsJSON), &sounds)
 		}
-		avgBedtimeHour = sumBedtimeMin / float64(len(sessions)) / 60.0
+
+		snoringTotal := 0
+		for _, s := range sounds {
+			if strings.EqualFold(s.Type, "snoring") {
+				snoringTotal += s.DurationSeconds
+			}
+		}
+
+		t, _ := time.Parse("2006-01-02 15:04:05.999999 -0700 MST", r.CreatedAt)
+		if t.IsZero() {
+			t, _ = time.Parse(time.RFC3339, r.CreatedAt)
+		}
+		if t.IsZero() {
+			// Fallback: strip sub-second and timezone suffix for simple parsing
+			t, _ = time.Parse("2006-01-02 15:04:05", r.CreatedAt[:min(len(r.CreatedAt), 19)])
+		}
+
+		sessions = append(sessions, sessionData{
+			score:           r.Score,
+			createdAt:       t,
+			snoringDuration: snoringTotal,
+			hasSnoring:      snoringTotal > 0,
+		})
 	}
 
-	if durationHours >= 7.0 {
-		return &NapOptimizerResponse{
-			NapNeeded:      false,
-			Reason:         "You slept well last night - no nap needed",
-			ChronotypeHour: avgBedtimeHour,
-		}, nil
+	// Compute aggregates
+	sessionsWithSnoring := 0
+	var sumScoreWith, sumScoreWithout float64
+	countWith, countWithout := 0, 0
+	var totalSnoringDur int
+
+	for _, sd := range sessions {
+		if sd.hasSnoring {
+			sessionsWithSnoring++
+			sumScoreWith += float64(sd.score)
+			countWith++
+			totalSnoringDur += sd.snoringDuration
+		} else {
+			sumScoreWithout += float64(sd.score)
+			countWithout++
+		}
 	}
 
-	// Optimal nap: ~8h after wake time, or around 2-3 PM
-	napStartHour := wakeHour + 8.0
-	if napStartHour < 13.0 {
-		napStartHour = 13.0
+	avgWith := 0.0
+	if countWith > 0 {
+		avgWith = math.Round(sumScoreWith/float64(countWith)*10) / 10
 	}
-	if napStartHour > 15.0 {
-		napStartHour = 14.0
+	avgWithout := 0.0
+	if countWithout > 0 {
+		avgWithout = math.Round(sumScoreWithout/float64(countWithout)*10) / 10
 	}
+	scoreDiff := math.Round((avgWithout-avgWith)*10) / 10
 
-	durMin := 20 // power nap
-	reason := "A 20-minute power nap will restore alertness"
-	if durationHours < 5.0 {
-		durMin = 90 // full sleep cycle
-		reason = "A 90-minute recovery nap will compensate for short sleep"
-	}
-
-	napEnd := napStartHour + float64(durMin)/60.0
-
-	fmtHour := func(h float64) string {
-		hrs := int(h)
-		mins := int(math.Round((h - float64(hrs)) * 60))
-		return fmt.Sprintf("%02d:%02d", hrs, mins)
+	snoringPct := math.Round(float64(sessionsWithSnoring)/float64(total)*1000) / 10
+	avgDurationSec := 0.0
+	if countWith > 0 {
+		avgDurationSec = math.Round(float64(totalSnoringDur)/float64(countWith)*10) / 10
 	}
 
-	return &NapOptimizerResponse{
-		NapNeeded:       true,
-		OptimalStart:    fmtHour(napStartHour),
-		OptimalEnd:      fmtHour(napEnd),
-		DurationMinutes: durMin,
-		Reason:          reason,
-		ChronotypeHour:  avgBedtimeHour,
+	// Insight
+	insight := "Snoring doesn't appear to significantly impact your sleep score."
+	if scoreDiff > 5 {
+		insight = "Snoring correlates with lower sleep quality. Consider a side-sleeping position."
+	} else if snoringPct > 50 {
+		insight = "You snore on most nights. Try sleeping on your side or elevating your pillow."
+	}
+
+	// Build trend for last 14 nights (sessions are ordered DESC, so reverse for chronological order)
+	trendCount := 14
+	if len(sessions) < trendCount {
+		trendCount = len(sessions)
+	}
+	trendSessions := sessions[:trendCount]
+	// Reverse so earliest night comes first
+	trend := make([]SnoringNight, trendCount)
+	for i, sd := range trendSessions {
+		dateStr := sd.createdAt.UTC().Format("2006-01-02")
+		trend[trendCount-1-i] = SnoringNight{
+			Date:            dateStr,
+			HasSnoring:      sd.hasSnoring,
+			SnoringDuration: sd.snoringDuration,
+			SleepScore:      sd.score,
+		}
+	}
+
+	return &SnoringAnalysisResponse{
+		TotalSessions:          total,
+		SessionsWithSnoring:    sessionsWithSnoring,
+		SnoringPct:             snoringPct,
+		AvgScoreWithSnoring:    avgWith,
+		AvgScoreWithoutSnoring: avgWithout,
+		ScoreDiff:              scoreDiff,
+		AvgDurationSecPerNight: avgDurationSec,
+		TrendNights:            trend,
+		Insight:                insight,
 	}, nil
 }
 
-// CreateDream stores a new dream journal entry.
-func (s *SleepService) CreateDream(appID string, userID uuid.UUID, req CreateDreamRequest) (*DreamResponse, error) {
-	if strings.TrimSpace(req.Text) == "" {
-		return nil, errors.New("text is required")
-	}
-	if len(req.Text) > 5000 {
-		req.Text = req.Text[:5000]
-	}
-	if len(req.Mood) > 20 {
-		req.Mood = req.Mood[:20]
-	}
-
-	dreamDate := req.DreamDate
-	if dreamDate == "" {
-		dreamDate = time.Now().Format("2006-01-02")
-	}
-
-	tagsJSON := "[]"
-	if len(req.Tags) > 0 {
-		if b, err := json.Marshal(req.Tags); err == nil {
-			tagsJSON = string(b)
-		}
-	}
-
-	dream := DreamEntry{
-		AppID:     appID,
-		UserID:    userID,
-		Text:      req.Text,
-		Mood:      req.Mood,
-		Tags:      tagsJSON,
-		DreamDate: dreamDate,
-	}
-
-	if err := s.db.Scopes(tenant.ForTenant(appID)).Create(&dream).Error; err != nil {
-		return nil, errors.New("storage error")
-	}
-
-	var tags []string
-	_ = json.Unmarshal([]byte(dream.Tags), &tags)
-	if tags == nil {
-		tags = []string{}
-	}
-
-	return &DreamResponse{
-		ID:        dream.ID.String(),
-		Text:      dream.Text,
-		Mood:      dream.Mood,
-		Tags:      tags,
-		DreamDate: dream.DreamDate,
-		CreatedAt: dream.CreatedAt.UTC().Format(time.RFC3339),
-	}, nil
-}
-
-// ListDreams retrieves dream journal entries for the given number of days.
-func (s *SleepService) ListDreams(appID string, userID uuid.UUID, days int) (*DreamListResponse, error) {
-	if days < 1 {
-		days = 30
-	}
-	if days > 365 {
-		days = 365
-	}
-	since := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
-
-	var dreams []DreamEntry
-	if err := s.db.Scopes(tenant.ForTenant(appID)).
-		Where("user_id = ? AND dream_date >= ?", userID, since).
-		Order("dream_date DESC, created_at DESC").
-		Limit(200).
-		Find(&dreams).Error; err != nil {
-		return nil, errors.New("storage error")
-	}
-
-	resp := make([]DreamResponse, len(dreams))
-	for i, d := range dreams {
-		var tags []string
-		_ = json.Unmarshal([]byte(d.Tags), &tags)
-		if tags == nil {
-			tags = []string{}
-		}
-		resp[i] = DreamResponse{
-			ID:        d.ID.String(),
-			Text:      d.Text,
-			Mood:      d.Mood,
-			Tags:      tags,
-			DreamDate: d.DreamDate,
-			CreatedAt: d.CreatedAt.UTC().Format(time.RFC3339),
-		}
-	}
-	return &DreamListResponse{Dreams: resp, Total: len(resp)}, nil
-}

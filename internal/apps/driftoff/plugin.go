@@ -23,7 +23,6 @@ func (p *DriftoffPlugin) Models() []interface{} {
 		&SleepStreak{},
 		&DailyCaffeineLog{},
 		&AlertnessLog{},
-		&DreamEntry{},
 	}
 }
 
@@ -102,12 +101,8 @@ func (p *DriftoffPlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *c
 	router.Post("/sleeps/alertness", handler.LogAlertness)
 	router.Get("/sleeps/alertness", handler.GetAlertnessLogs)
 
-	// Nap optimizer (MUST be before parameterized routes)
-	router.Get("/sleeps/nap-optimizer", handler.GetNapOptimizer)
-
-	// Dream journal (MUST be before parameterized routes)
-	router.Post("/sleeps/dream", handler.CreateDream)
-	router.Get("/sleeps/dreams", handler.ListDreams)
+	// Snoring analysis
+	router.Get("/sleeps/snoring-analysis", handler.GetSnoringAnalysis)
 
 	// Parameterized routes (MUST be last)
 	router.Get("/sleeps/:id", handler.Get)
