@@ -383,3 +383,17 @@ type ExportEntry struct {
 	Sentiment string
 	EntryType string
 }
+
+// WritingPrompt is a single personalized writing prompt returned by /journals/writing-prompts.
+type WritingPrompt struct {
+	ID       string `json:"id"`
+	Text     string `json:"text"`
+	Category string `json:"category"` // "gratitude", "reflection", "challenge", "growth"
+}
+
+// WritingPromptsResponse is returned by GET /journals/writing-prompts.
+type WritingPromptsResponse struct {
+	Prompts     []WritingPrompt `json:"prompts"`
+	MoodContext string          `json:"mood_context"` // "low", "neutral", "high"
+	Date        string          `json:"date"`
+}

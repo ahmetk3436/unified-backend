@@ -303,30 +303,12 @@ type SubEmotionsResponse struct {
 	SubEmotions map[string][]string `json:"sub_emotions"`
 }
 
-// TherapistReportResponse is a structured clinical mood summary.
-type TherapistReportResponse struct {
-	Period       string        `json:"period"`        // e.g. "Feb 3 – Mar 4, 2026"
-	TotalEntries int           `json:"total_entries"`
-	AverageMood  float64       `json:"average_mood"` // 1-10
-	MoodTrend    string        `json:"mood_trend"`   // "improving" / "declining" / "stable"
-	TopEmotions  []EmotionFreq `json:"top_emotions"`
-	LowDays      int           `json:"low_days"`    // days with mood <= 3
-	HighDays     int           `json:"high_days"`   // days with mood >= 8
-	Narrative    string        `json:"narrative"`   // AI-generated clinical summary
-	ExportedAt   string        `json:"exported_at"`
-}
-
-type EmotionFreq struct {
-	Emotion string  `json:"emotion"`
-	Count   int     `json:"count"`
-	Pct     float64 `json:"pct"`
-}
-
-type WeeklyNarrativeResponse struct {
-	Narrative       string  `json:"narrative"`
-	WeekStart       string  `json:"week_start"`
-	WeekEnd         string  `json:"week_end"`
-	DominantEmotion string  `json:"dominant_emotion"`
-	EntryCount      int     `json:"entry_count"`
-	AverageMood     float64 `json:"average_mood"`
+// CrisisCheckResponse is returned by GET /moods/crisis-check.
+// InCrisis is true when the user has 5 or more consecutive low-mood days.
+type CrisisCheckResponse struct {
+	InCrisis           bool    `json:"in_crisis"`
+	ConsecutiveLowDays int     `json:"consecutive_low_days"`
+	AvgIntensityLast7  float64 `json:"avg_intensity_last_7"`
+	TotalEntriesLast7  int     `json:"total_entries_last_7"`
+	Recommendation     string  `json:"recommendation"`
 }

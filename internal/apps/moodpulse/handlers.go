@@ -686,30 +686,25 @@ func (h *MoodHandler) GetSubEmotions(c *fiber.Ctx) error {
 	return c.JSON(h.svc.GetSubEmotions())
 }
 
-// TherapistReport handles GET /moods/therapist-report
-func (h *MoodHandler) TherapistReport(c *fiber.Ctx) error {
-	appID := c.Locals("app_id").(string)
-	userID := c.Locals("user_id").(uuid.UUID)
-	report, err := h.svc.GetTherapistReport(appID, userID)
+// CrisisCheck handles GET /moods/crisis-check.
+// Returns whether the user is in a crisis pattern (5+ consecutive low-mood days).
+// Light DB-only endpoint — no AI call, no extra rate limit needed.
+func (h *MoodHandler) CrisisCheck(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
 	if err != nil {
-		if err.Error() == "not enough data" {
-			return c.Status(422).JSON(fiber.Map{"error": "not_enough_data", "message": "Log at least 7 moods to generate a report"})
-		}
-		return c.Status(500).JSON(fiber.Map{"error": "could not generate report"})
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
 	}
-	return c.JSON(report)
-}
 
-// GetWeeklyNarrative handles GET /moods/weekly-narrative
-func (h *MoodHandler) GetWeeklyNarrative(c *fiber.Ctx) error {
-	appID := c.Locals("app_id").(string)
-	userID := c.Locals("user_id").(uuid.UUID)
-	narrative, err := h.svc.GetWeeklyNarrative(appID, userID)
+	resp, err := h.svc.GetCrisisCheck(appID, userID)
 	if err != nil {
-		if err.Error() == "not enough data" {
-			return c.Status(422).JSON(fiber.Map{"error": "not_enough_data", "message": "Log at least 3 moods this week to generate a narrative"})
-		}
-		return c.Status(500).JSON(fiber.Map{"error": "could not generate narrative"})
+		slog.Error("[moodpulse] crisis check failed", "app", appID, "user", userID, "error", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "Crisis check unavailable",
+		})
 	}
-	return c.JSON(narrative)
+
+	return c.JSON(resp)
 }

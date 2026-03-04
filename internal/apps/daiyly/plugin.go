@@ -126,6 +126,9 @@ func (p *DaiylyPlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *con
 	// On This Day — historical entries from the same calendar day in prior years.
 	router.Get("/journals/on-this-day", handler.OnThisDay)
 
+	// Writing prompts — DB-only, no AI, no rate limit (MUST be before :id catch-all).
+	router.Get("/journals/writing-prompts", handler.GetWritingPrompts)
+
 	// Per-user rate limiters for upload endpoints.
 	// Photo: 20 uploads/hour — prevents disk exhaustion from a single authenticated user.
 	// Transcribe: 10/hour — each call proxies to paid Whisper API (cost control + disk).

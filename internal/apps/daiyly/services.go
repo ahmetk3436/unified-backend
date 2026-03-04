@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"sort"
 	"strings"
@@ -2583,4 +2584,111 @@ func (s *JournalService) GetOnThisDay(appID string, userID uuid.UUID) (*OnThisDa
 	}
 
 	return &OnThisDayResponse{Entries: result}, nil
+}
+
+// promptsByCategory is the static pool of writing prompts used by GetWritingPrompts.
+// No DB or AI needed — prompts are deterministic per day via a date-seeded RNG.
+var promptsByCategory = map[string][]WritingPrompt{
+	"gratitude": {
+		{ID: "g1", Text: "What's one small thing that made today better?", Category: "gratitude"},
+		{ID: "g2", Text: "Name three people you're grateful for today.", Category: "gratitude"},
+		{ID: "g3", Text: "What did your body do well today?", Category: "gratitude"},
+	},
+	"reflection": {
+		{ID: "r1", Text: "What's been on your mind this week?", Category: "reflection"},
+		{ID: "r2", Text: "What would you tell your morning self right now?", Category: "reflection"},
+		{ID: "r3", Text: "What did you learn about yourself today?", Category: "reflection"},
+	},
+	"challenge": {
+		{ID: "c1", Text: "What's one thing that felt hard today, and why?", Category: "challenge"},
+		{ID: "c2", Text: "What's a worry you can put on paper and let go of?", Category: "challenge"},
+		{ID: "c3", Text: "What's one thing you wish went differently?", Category: "challenge"},
+	},
+	"growth": {
+		{ID: "gw1", Text: "What's one thing you're looking forward to?", Category: "growth"},
+		{ID: "gw2", Text: "What would make tomorrow better than today?", Category: "growth"},
+		{ID: "gw3", Text: "What's one thing you're proud of this week?", Category: "growth"},
+	},
+}
+
+// pickPrompt selects a prompt from the given category using the provided RNG.
+func pickPrompt(rng *rand.Rand, category string) WritingPrompt {
+	pool := promptsByCategory[category]
+	return pool[rng.Intn(len(pool))]
+}
+
+// GetWritingPrompts returns 4 daily writing prompts personalised by the user's recent mood.
+// The RNG is seeded with the UTC day timestamp so prompts are stable within a day
+// but rotate each day without any DB writes.
+func (s *JournalService) GetWritingPrompts(appID string, userID uuid.UUID) (*WritingPromptsResponse, error) {
+	// Query last 3 journal entries to determine mood context.
+	var recent []JournalEntry
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ? AND deleted_at IS NULL", userID).
+		Order("entry_date DESC, created_at DESC").
+		Limit(3).
+		Find(&recent).Error; err != nil {
+		return nil, err
+	}
+
+	// Compute average mood score from recent entries.
+	moodContext := "neutral"
+	if len(recent) > 0 {
+		var sum int
+		for _, e := range recent {
+			sum += e.MoodScore
+		}
+		avg := float64(sum) / float64(len(recent))
+		// MoodScore is 1-100. Normalise to 1-5 scale for thresholds.
+		// avg <= 2  (<=40/100) → "low", <= 3.5 (<=70/100) → "neutral", > 3.5 → "high"
+		normalised := avg / 20.0 // maps 0-100 → 0-5
+		switch {
+		case normalised <= 2.0:
+			moodContext = "low"
+		case normalised <= 3.5:
+			moodContext = "neutral"
+		default:
+			moodContext = "high"
+		}
+	}
+
+	// Date-seeded RNG for deterministic daily prompts.
+	seed := time.Now().UTC().Truncate(24 * time.Hour).Unix()
+	// Include userID in seed so different users get different prompts on the same day.
+	seed += int64(userID[0]) + int64(userID[1])<<8
+	rng := rand.New(rand.NewSource(seed))
+
+	var prompts []WritingPrompt
+	switch moodContext {
+	case "low":
+		// 2 reflection + 1 challenge + 1 growth
+		prompts = []WritingPrompt{
+			pickPrompt(rng, "reflection"),
+			pickPrompt(rng, "reflection"),
+			pickPrompt(rng, "challenge"),
+			pickPrompt(rng, "growth"),
+		}
+	case "high":
+		// 2 gratitude + 1 reflection + 1 growth
+		prompts = []WritingPrompt{
+			pickPrompt(rng, "gratitude"),
+			pickPrompt(rng, "gratitude"),
+			pickPrompt(rng, "reflection"),
+			pickPrompt(rng, "growth"),
+		}
+	default: // neutral
+		// 1 gratitude + 1 reflection + 1 challenge + 1 growth
+		prompts = []WritingPrompt{
+			pickPrompt(rng, "gratitude"),
+			pickPrompt(rng, "reflection"),
+			pickPrompt(rng, "challenge"),
+			pickPrompt(rng, "growth"),
+		}
+	}
+
+	return &WritingPromptsResponse{
+		Prompts:     prompts,
+		MoodContext: moodContext,
+		Date:        time.Now().UTC().Format("2006-01-02"),
+	}, nil
 }

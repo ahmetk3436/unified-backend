@@ -121,9 +121,8 @@ func (p *MoodPulsePlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *
 	router.Get("/moods/med-correlation", handler.GetMedCorrelation)
 	router.Get("/moods/sub-emotions", handler.GetSubEmotions)
 
-	// AI-powered clinical + narrative endpoints (MUST be before :id catch-all)
-	router.Get("/moods/therapist-report", aiLimiter, handler.TherapistReport)
-	router.Get("/moods/weekly-narrative", aiLimiter, handler.GetWeeklyNarrative)
+	// Crisis check — DB-only, no AI, no extra rate limit (MUST be before :id catch-all)
+	router.Get("/moods/crisis-check", handler.CrisisCheck)
 
 	// Parameterized routes last
 	router.Get("/moods/:id", handler.Get)

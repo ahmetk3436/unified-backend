@@ -777,3 +777,26 @@ func (h *JournalHandler) OnThisDay(c *fiber.Ctx) error {
 
 	return c.JSON(result)
 }
+
+// GetWritingPrompts handles GET /journals/writing-prompts.
+// Returns 4 daily writing prompts personalised by the user's recent mood.
+// No AI call — prompts are static and selected deterministically per day.
+func (h *JournalHandler) GetWritingPrompts(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	resp, err := h.service.GetWritingPrompts(appID, userID)
+	if err != nil {
+		slog.Error("writing prompts failed", "app", appID, "user", userID, "error", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "Failed to fetch writing prompts",
+		})
+	}
+
+	return c.JSON(resp)
+}
