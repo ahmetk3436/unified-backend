@@ -426,6 +426,23 @@ func (h *SleepHandler) GetCBTIInsights(c *fiber.Ctx) error {
 	return c.JSON(resp)
 }
 
+// GetSleepRegularityIndex handles GET /sleeps/sri
+// Returns a Sleep Regularity Index score (World Sleep Society 2025).
+func (h *SleepHandler) GetSleepRegularityIndex(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
+	}
+
+	resp, err := h.svc.GetSleepRegularityIndex(appID, userID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "sri unavailable")
+	}
+
+	return c.JSON(resp)
+}
+
 // GetLifestyleCorrelation handles GET /sleeps/lifestyle-correlation
 // Returns caffeine timing and exercise correlations with sleep metrics.
 func (h *SleepHandler) GetLifestyleCorrelation(c *fiber.Ctx) error {

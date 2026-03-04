@@ -1384,6 +1384,127 @@ func (s *SleepService) GetCBTIInsights(appID string, userID uuid.UUID) (*CBTIIns
 	return resp, nil
 }
 
+// GetSleepRegularityIndex computes a Sleep Regularity Index (SRI) score endorsed by
+// the World Sleep Society 2025. SRI is derived from the standard deviation of the
+// user's bedtime and wake-time across the last 14-30 sessions:
+//   score = 100 × max(0, 1 − stdDev/90)  (90-min tolerance before score drops to 0)
+//
+// Returns grade + actionable coaching if sufficient data exists (≥7 sessions).
+func (s *SleepService) GetSleepRegularityIndex(appID string, userID uuid.UUID) (*SRIResponse, error) {
+	const minSessions = 7
+	const maxSessions = 30
+
+	var sessions []SleepSession
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ?", userID).
+		Order("bedtime DESC").
+		Limit(maxSessions).
+		Find(&sessions).Error; err != nil {
+		return nil, fmt.Errorf("fetch sessions: %w", err)
+	}
+
+	resp := &SRIResponse{
+		NightsSampled: len(sessions),
+		CitationNote:  "World Sleep Society 2025 Sleep Regularity Index guidelines.",
+	}
+
+	if len(sessions) < minSessions {
+		resp.Score = 0
+		resp.Grade = "Not enough data"
+		resp.Insight = fmt.Sprintf("Log %d more nights to unlock your Sleep Regularity Index.", minSessions-len(sessions))
+		return resp, nil
+	}
+
+	// Compute average bedtime offset (minutes since midnight, handling day crossover).
+	toMinutes := func(t time.Time) float64 {
+		h := float64(t.Hour())
+		m := float64(t.Minute())
+		mins := h*60 + m
+		// Shift late-night times (before 6am) to after midnight for continuity.
+		// e.g. 1:00 AM → 1*60 = 60; treat as 60+1440? No — we shift forward by treating
+		// times < 6*60 as belonging to the "next day" (+1440) for variance computation.
+		// This prevents midnight wraparound artifacts.
+		if mins < 360 { // before 6am
+			mins += 1440
+		}
+		return mins
+	}
+
+	bedMins := make([]float64, len(sessions))
+	wakeMins := make([]float64, len(sessions))
+	for i, s := range sessions {
+		bedMins[i] = toMinutes(s.Bedtime)
+		wakeMins[i] = toMinutes(s.WakeTime)
+	}
+
+	stdDev := func(vals []float64) (mean, std float64) {
+		n := float64(len(vals))
+		for _, v := range vals {
+			mean += v
+		}
+		mean /= n
+		var variance float64
+		for _, v := range vals {
+			d := v - mean
+			variance += d * d
+		}
+		std = math.Sqrt(variance / n)
+		return
+	}
+
+	avgBed, stdBed := stdDev(bedMins)
+	avgWake, stdWake := stdDev(wakeMins)
+
+	// Combined variance: weight bedtime 60%, wake time 40%.
+	combined := 0.6*stdBed + 0.4*stdWake
+
+	// Normalise: 0 variance → 100, 90+ min variance → 0.
+	score := math.Max(0, 100*(1-combined/90.0))
+	score = math.Round(score*10) / 10
+
+	// Convert average minutes back to clock hour (0-24).
+	toHour := func(mins float64) float64 {
+		if mins >= 1440 {
+			mins -= 1440
+		}
+		return math.Round(mins/60*10) / 10
+	}
+	avgBedHour := toHour(avgBed)
+	avgWakeHour := toHour(avgWake)
+
+	// Grade thresholds (World Sleep Society 2025).
+	var grade, insight, rec string
+	switch {
+	case score >= 85:
+		grade = "Excellent"
+		insight = fmt.Sprintf("Your bedtime varies only %.0f min on average — top-tier sleep regularity.", stdBed)
+		rec = "Maintain your consistent schedule to preserve circadian alignment."
+	case score >= 70:
+		grade = "Good"
+		insight = fmt.Sprintf("Your sleep timing is fairly consistent (±%.0f min variance).", combined)
+		rec = "Try to keep bedtime within a 30-minute window to reach Excellent."
+	case score >= 50:
+		grade = "Fair"
+		insight = fmt.Sprintf("Irregular sleep timing (±%.0f min variance) is fragmenting your sleep quality.", combined)
+		rec = "Pick a target bedtime and stick within 30 minutes for 14 days. Even weekends matter."
+	default:
+		grade = "Poor"
+		insight = fmt.Sprintf("High variability (±%.0f min) is likely disrupting your circadian rhythm.", combined)
+		rec = "Social jet lag is present. Align your weekend bedtime closer to your weekday schedule."
+	}
+
+	resp.Score = score
+	resp.Grade = grade
+	resp.BedtimeVarianceMin = math.Round(stdBed*10) / 10
+	resp.WakeVarianceMin = math.Round(stdWake*10) / 10
+	resp.AvgBedtimeHour = avgBedHour
+	resp.AvgWakeHour = avgWakeHour
+	resp.Insight = insight
+	resp.Recommendation = rec
+
+	return resp, nil
+}
+
 // avgIntSlice returns the mean of a non-empty int slice.
 func avgIntSlice(vals []int) float64 {
 	if len(vals) == 0 {

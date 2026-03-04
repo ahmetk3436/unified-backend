@@ -238,6 +238,21 @@ type CBTIInsightsResponse struct {
 	Recommendations []CBTIRecommendation `json:"recommendations"`
 }
 
+// --- Sleep Regularity Index ---
+
+type SRIResponse struct {
+	Score               float64  `json:"score"`               // 0-100; higher = more regular
+	Grade               string   `json:"grade"`               // "Excellent" / "Good" / "Fair" / "Poor"
+	BedtimeVarianceMin  float64  `json:"bedtime_variance_min"` // std dev of bedtime offset in minutes
+	WakeVarianceMin     float64  `json:"wake_variance_min"`    // std dev of wake time offset in minutes
+	NightsSampled       int      `json:"nights_sampled"`
+	AvgBedtimeHour      float64  `json:"avg_bedtime_hour"`  // 0-24
+	AvgWakeHour         float64  `json:"avg_wake_hour"`     // 0-24
+	Insight             string   `json:"insight"`
+	Recommendation      string   `json:"recommendation"`
+	CitationNote        string   `json:"citation_note"`
+}
+
 // --- Lifestyle Correlation (caffeine + exercise) ---
 
 type CaffeineCorrelationResult struct {

@@ -45,11 +45,12 @@ func (p *DriftoffPlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *c
 	router.Post("/sleeps/caffeine", handler.LogCaffeine)
 	router.Get("/sleeps/caffeine", handler.GetCaffeineLogs)
 
-	// Correlation + CBT-I insights (MUST be before parameterized routes)
+	// Correlation + CBT-I + SRI insights (MUST be before parameterized routes)
 	router.Get("/sleeps/sound-correlation", handler.GetSoundCorrelation)
 	router.Get("/sleeps/temp-correlation", handler.GetTempCorrelation)
 	router.Get("/sleeps/cbti-insights", handler.GetCBTIInsights)
 	router.Get("/sleeps/lifestyle-correlation", handler.GetLifestyleCorrelation)
+	router.Get("/sleeps/sri", handler.GetSleepRegularityIndex)
 
 	// Parameterized routes (MUST be last)
 	router.Get("/sleeps/:id", handler.Get)
