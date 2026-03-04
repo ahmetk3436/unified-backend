@@ -1867,3 +1867,384 @@ func (s *SleepService) GetSnoringAnalysis(appID string, userID uuid.UUID) (*Snor
 	}, nil
 }
 
+// --- Pre-Sleep Ritual services ---
+
+// CreateOrUpdateRitual upserts a SleepRitual record by (appID, userID, date).
+// If a record already exists for that date it is overwritten.
+func (s *SleepService) CreateOrUpdateRitual(appID string, userID uuid.UUID, req CreateRitualRequest) (*SleepRitual, error) {
+	if req.Date == "" {
+		return nil, errors.New("date is required")
+	}
+	if _, err := time.Parse("2006-01-02", req.Date); err != nil {
+		return nil, errors.New("date must be YYYY-MM-DD")
+	}
+	if len(req.Notes) > 500 {
+		return nil, errors.New("notes must be at most 500 characters")
+	}
+	if req.ScreenTimeMin < 0 {
+		req.ScreenTimeMin = 0
+	}
+	if req.LastMealHoursAgo < 0 {
+		req.LastMealHoursAgo = 0
+	}
+
+	ritual := SleepRitual{
+		AppID:             appID,
+		UserID:            userID,
+		Date:              req.Date,
+		HadAlcohol:        req.HadAlcohol,
+		LastDrinkHoursAgo: req.LastDrinkHoursAgo,
+		LastMealHoursAgo:  req.LastMealHoursAgo,
+		ScreenTimeMin:     req.ScreenTimeMin,
+		ExercisedToday:    req.ExercisedToday,
+		ExerciseHoursAgo:  req.ExerciseHoursAgo,
+		Notes:             req.Notes,
+	}
+
+	// Upsert: if (app_id, user_id, date) already exists, update all fields.
+	result := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("app_id = ? AND user_id = ? AND date = ?", appID, userID, req.Date).
+		Assign(SleepRitual{
+			HadAlcohol:        req.HadAlcohol,
+			LastDrinkHoursAgo: req.LastDrinkHoursAgo,
+			LastMealHoursAgo:  req.LastMealHoursAgo,
+			ScreenTimeMin:     req.ScreenTimeMin,
+			ExercisedToday:    req.ExercisedToday,
+			ExerciseHoursAgo:  req.ExerciseHoursAgo,
+			Notes:             req.Notes,
+		}).
+		FirstOrCreate(&ritual)
+	if result.Error != nil {
+		return nil, fmt.Errorf("upsert ritual: %w", result.Error)
+	}
+
+	// If it already existed, update.
+	if result.RowsAffected == 0 {
+		if err := s.db.Model(&ritual).Updates(map[string]interface{}{
+			"had_alcohol":          req.HadAlcohol,
+			"last_drink_hours_ago": req.LastDrinkHoursAgo,
+			"last_meal_hours_ago":  req.LastMealHoursAgo,
+			"screen_time_min":      req.ScreenTimeMin,
+			"exercised_today":      req.ExercisedToday,
+			"exercise_hours_ago":   req.ExerciseHoursAgo,
+			"notes":                req.Notes,
+		}).Error; err != nil {
+			return nil, fmt.Errorf("update ritual: %w", err)
+		}
+	}
+
+	return &ritual, nil
+}
+
+// GetRitualCorrelation joins ritual records with sleep sessions on date and
+// computes impact of each behavioral factor on sleep score.
+// Requires at least 5 paired nights per factor; 14+ total for has_enough_data=true.
+func (s *SleepService) GetRitualCorrelation(appID string, userID uuid.UUID) (*RitualCorrelationResponse, error) {
+	type pairedRow struct {
+		Date          string
+		Score         float64
+		HadAlcohol    bool
+		ScreenTimeMin int
+		ExercisedToday bool
+		LastMealHoursAgo int
+	}
+
+	// Join rituals and sleep sessions on date (date extracted from bedtime).
+	var rows []pairedRow
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Raw(`SELECT
+			r.date,
+			s.score AS score,
+			r.had_alcohol,
+			r.screen_time_min,
+			r.exercised_today,
+			r.last_meal_hours_ago
+		FROM sleep_rituals r
+		JOIN sleep_sessions s
+			ON TO_CHAR(s.bedtime AT TIME ZONE 'UTC', 'YYYY-MM-DD') = r.date
+			AND s.user_id = r.user_id
+			AND s.app_id = r.app_id
+			AND s.deleted_at IS NULL
+		WHERE r.app_id = ? AND r.user_id = ? AND r.deleted_at IS NULL`,
+			appID, userID).
+		Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("fetch paired rows: %w", err)
+	}
+
+	dataPoints := len(rows)
+	hasEnoughData := dataPoints >= 14
+
+	resp := &RitualCorrelationResponse{
+		HasEnoughData: hasEnoughData,
+		DataPoints:    dataPoints,
+	}
+
+	if dataPoints == 0 {
+		resp.TopInsight = "Log at least 14 nights of rituals and sleep sessions to see correlations."
+		return resp, nil
+	}
+
+	// Helper: compute average scores for rows where predicate is true/false.
+	computeImpact := func(factorName string, withPred func(pairedRow) bool) *RitualImpactItem {
+		var withScores, withoutScores []float64
+		for _, r := range rows {
+			if withPred(r) {
+				withScores = append(withScores, r.Score)
+			} else {
+				withoutScores = append(withoutScores, r.Score)
+			}
+		}
+		if len(withScores) < 5 || len(withoutScores) < 5 {
+			return nil
+		}
+		avgWith := func(xs []float64) float64 {
+			sum := 0.0
+			for _, x := range xs {
+				sum += x
+			}
+			return sum / float64(len(xs))
+		}
+		with := avgWith(withScores)
+		without := avgWith(withoutScores)
+		delta := 0.0
+		if without > 0 {
+			delta = (with - without) / without * 100
+		}
+		insight := fmt.Sprintf("Sleep score %.1f%% %s on nights with %s (%d nights of data)",
+			math.Abs(delta),
+			func() string {
+				if delta < 0 {
+					return "lower"
+				}
+				return "higher"
+			}(),
+			factorName,
+			len(withScores)+len(withoutScores),
+		)
+		return &RitualImpactItem{
+			FactorName:    factorName,
+			WithFactor:    with,
+			WithoutFactor: without,
+			DeltaPct:      delta,
+			SampleSize:    len(withScores) + len(withoutScores),
+			Insight:       insight,
+		}
+	}
+
+	resp.AlcoholImpact = computeImpact("alcohol", func(r pairedRow) bool { return r.HadAlcohol })
+	resp.ExerciseImpact = computeImpact("exercise", func(r pairedRow) bool { return r.ExercisedToday })
+	resp.ScreenTimeImpact = computeImpact("high screen time (>30 min)", func(r pairedRow) bool { return r.ScreenTimeMin > 30 })
+	resp.LateEatingImpact = computeImpact("eating within 2 hours of bed", func(r pairedRow) bool { return r.LastMealHoursAgo < 2 })
+
+	// Generate top insight from the highest absolute delta factor.
+	bestDelta := 0.0
+	bestInsight := ""
+	for _, item := range []*RitualImpactItem{resp.AlcoholImpact, resp.ExerciseImpact, resp.ScreenTimeImpact, resp.LateEatingImpact} {
+		if item != nil && math.Abs(item.DeltaPct) > math.Abs(bestDelta) {
+			bestDelta = item.DeltaPct
+			bestInsight = item.Insight
+		}
+	}
+	if bestInsight == "" {
+		bestInsight = fmt.Sprintf("Not enough paired data per factor yet (%d total nights logged). Keep going!", dataPoints)
+	}
+	resp.TopInsight = bestInsight
+
+	return resp, nil
+}
+
+// --- CBT-I Program services ---
+
+// StartCBTIProgram creates or returns the existing CBTIProgress record for a user.
+// If a program is already active, it returns the existing record without resetting it.
+func (s *SleepService) StartCBTIProgram(appID string, userID uuid.UUID, req StartCBTIRequest) (*CBTIStatusResponse, error) {
+	if req.SleepWindowStart == "" || req.SleepWindowEnd == "" {
+		return nil, errors.New("sleep_window_start and sleep_window_end are required")
+	}
+	// Validate HH:MM format.
+	validateTime := func(t string) error {
+		if len(t) != 5 || t[2] != ':' {
+			return fmt.Errorf("invalid time format %q: must be HH:MM", t)
+		}
+		return nil
+	}
+	if err := validateTime(req.SleepWindowStart); err != nil {
+		return nil, err
+	}
+	if err := validateTime(req.SleepWindowEnd); err != nil {
+		return nil, err
+	}
+
+	// Check if already active.
+	var existing CBTIProgress
+	err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("app_id = ? AND user_id = ? AND is_active = true", appID, userID).
+		First(&existing).Error
+	if err == nil {
+		// Already enrolled — return current status.
+		return s.buildCBTIStatusResponse(appID, userID, &existing)
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("check existing cbti: %w", err)
+	}
+
+	prog := CBTIProgress{
+		AppID:            appID,
+		UserID:           userID,
+		StartDate:        time.Now().UTC().Format("2006-01-02"),
+		CurrentWeek:      1,
+		CurrentDay:       1,
+		SleepWindowStart: req.SleepWindowStart,
+		SleepWindowEnd:   req.SleepWindowEnd,
+		CompletedDays:    0,
+		IsActive:         true,
+	}
+	if err := s.db.Create(&prog).Error; err != nil {
+		return nil, fmt.Errorf("create cbti progress: %w", err)
+	}
+
+	return s.buildCBTIStatusResponse(appID, userID, &prog)
+}
+
+// GetCBTIStatus returns the current CBT-I program status for a user.
+func (s *SleepService) GetCBTIStatus(appID string, userID uuid.UUID) (*CBTIStatusResponse, error) {
+	var prog CBTIProgress
+	err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("app_id = ? AND user_id = ?", appID, userID).
+		Order("created_at DESC").
+		First(&prog).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return &CBTIStatusResponse{IsEnrolled: false}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("fetch cbti progress: %w", err)
+	}
+
+	return s.buildCBTIStatusResponse(appID, userID, &prog)
+}
+
+// buildCBTIStatusResponse constructs a CBTIStatusResponse from a progress record.
+// It fetches check-ins to compute adherence and weekly insight.
+func (s *SleepService) buildCBTIStatusResponse(appID string, userID uuid.UUID, prog *CBTIProgress) (*CBTIStatusResponse, error) {
+	var checkIns []CBTIDayCheckIn
+	s.db.Scopes(tenant.ForTenant(appID)).
+		Where("app_id = ? AND user_id = ?", appID, userID).
+		Order("created_at DESC").
+		Find(&checkIns)
+
+	followCount := 0
+	for _, ci := range checkIns {
+		if ci.DidFollow {
+			followCount++
+		}
+	}
+
+	adherencePct := 0.0
+	if len(checkIns) > 0 {
+		adherencePct = float64(followCount) / float64(len(checkIns)) * 100
+	}
+
+	// Count check-ins for the current week only.
+	weekFollowed := 0
+	weekTotal := 0
+	for _, ci := range checkIns {
+		if ci.Week == prog.CurrentWeek {
+			weekTotal++
+			if ci.DidFollow {
+				weekFollowed++
+			}
+		}
+	}
+
+	weeklyInsight := fmt.Sprintf("Week %d: %d of %d days completed", prog.CurrentWeek, weekTotal, 7)
+	if weekTotal > 0 {
+		weeklyInsight = fmt.Sprintf("Week %d: %d of %d days followed your sleep window", prog.CurrentWeek, weekFollowed, weekTotal)
+	}
+
+	isCompleted := prog.CompletedAt != nil
+	completedAt := ""
+	if prog.CompletedAt != nil {
+		completedAt = *prog.CompletedAt
+	}
+
+	return &CBTIStatusResponse{
+		IsEnrolled:       prog.IsActive || isCompleted,
+		CurrentWeek:      prog.CurrentWeek,
+		CurrentDay:       prog.CurrentDay,
+		StartDate:        prog.StartDate,
+		SleepWindowStart: prog.SleepWindowStart,
+		SleepWindowEnd:   prog.SleepWindowEnd,
+		CompletedDays:    prog.CompletedDays,
+		AdherencePct:     adherencePct,
+		WeeklyInsight:    weeklyInsight,
+		IsCompleted:      isCompleted,
+		CompletedAt:      completedAt,
+	}, nil
+}
+
+// SubmitCBTICheckIn records a daily check-in, advances the day/week counter, and
+// marks the program completed when week 6 day 7 is reached.
+func (s *SleepService) SubmitCBTICheckIn(appID string, userID uuid.UUID, req CBTICheckInRequest) (*CBTIStatusResponse, error) {
+	var prog CBTIProgress
+	err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("app_id = ? AND user_id = ? AND is_active = true", appID, userID).
+		First(&prog).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, errors.New("no active cbti program found")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("fetch cbti progress: %w", err)
+	}
+	if len(req.Notes) > 500 {
+		return nil, errors.New("notes must be at most 500 characters")
+	}
+
+	checkIn := CBTIDayCheckIn{
+		AppID:     appID,
+		UserID:    userID,
+		Date:      time.Now().UTC().Format("2006-01-02"),
+		Week:      prog.CurrentWeek,
+		DidFollow: req.DidFollow,
+		Notes:     req.Notes,
+	}
+	if err := s.db.Create(&checkIn).Error; err != nil {
+		return nil, fmt.Errorf("create cbti check-in: %w", err)
+	}
+
+	// Advance counters.
+	prog.CompletedDays++
+	prog.CurrentDay++
+	if prog.CurrentDay > 7 {
+		prog.CurrentDay = 1
+		prog.CurrentWeek++
+	}
+
+	// Mark complete if finished week 6.
+	if prog.CurrentWeek > 6 {
+		now := time.Now().UTC().Format("2006-01-02")
+		prog.CompletedAt = &now
+		prog.IsActive = false
+	}
+
+	if err := s.db.Save(&prog).Error; err != nil {
+		return nil, fmt.Errorf("update cbti progress: %w", err)
+	}
+
+	return s.buildCBTIStatusResponse(appID, userID, &prog)
+}
+
+// PauseCBTIProgram sets is_active=false on the user's active program.
+func (s *SleepService) PauseCBTIProgram(appID string, userID uuid.UUID) error {
+	result := s.db.Scopes(tenant.ForTenant(appID)).
+		Model(&CBTIProgress{}).
+		Where("app_id = ? AND user_id = ? AND is_active = true", appID, userID).
+		Update("is_active", false)
+	if result.Error != nil {
+		return fmt.Errorf("pause cbti: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("no active cbti program found")
+	}
+	return nil
+}
+

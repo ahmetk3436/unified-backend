@@ -708,3 +708,34 @@ func (h *MoodHandler) CrisisCheck(c *fiber.Ctx) error {
 
 	return c.JSON(resp)
 }
+
+// GetActionableInsight handles GET /moods/actionable-insight
+// Uses GPT-4o-mini to generate one specific weekly experiment suggestion based on
+// the last 14 days of mood data. Requires at least 7 days of data.
+// Client is expected to cache the response for 24 hours (X-Cache-Ttl header).
+func (h *MoodHandler) GetActionableInsight(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(dto.ErrorResponse{
+			Error: true, Message: "Unauthorized",
+		})
+	}
+
+	insight, err := h.svc.GetActionableInsight(c.Context(), appID, userID)
+	if err != nil {
+		if err == ErrNotEnoughData {
+			return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+				"error":        "not_enough_data",
+				"minimum_days": 7,
+			})
+		}
+		slog.Error("[moodpulse] actionable insight failed", "app", appID, "user", userID, "error", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
+			Error: true, Message: "Actionable insight unavailable",
+		})
+	}
+
+	c.Set("X-Cache-Ttl", "86400")
+	return c.JSON(insight)
+}

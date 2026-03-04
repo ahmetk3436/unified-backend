@@ -23,6 +23,9 @@ func (p *DriftoffPlugin) Models() []interface{} {
 		&SleepStreak{},
 		&DailyCaffeineLog{},
 		&AlertnessLog{},
+		&SleepRitual{},
+		&CBTIProgress{},
+		&CBTIDayCheckIn{},
 	}
 }
 
@@ -103,6 +106,16 @@ func (p *DriftoffPlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *c
 
 	// Snoring analysis
 	router.Get("/sleeps/snoring-analysis", handler.GetSnoringAnalysis)
+
+	// Pre-sleep ritual (MUST be before parameterized routes)
+	router.Post("/sleeps/ritual", handler.CreateRitual)
+	router.Get("/sleeps/ritual-correlation", handler.GetRitualCorrelation)
+
+	// CBT-I program (MUST be before parameterized routes)
+	router.Post("/sleeps/cbti/start", handler.StartCBTIProgram)
+	router.Get("/sleeps/cbti/status", handler.GetCBTIStatus)
+	router.Post("/sleeps/cbti/checkin", handler.SubmitCBTICheckIn)
+	router.Post("/sleeps/cbti/pause", handler.PauseCBTIProgram)
 
 	// Parameterized routes (MUST be last)
 	router.Get("/sleeps/:id", handler.Get)

@@ -312,3 +312,14 @@ type CrisisCheckResponse struct {
 	TotalEntriesLast7  int     `json:"total_entries_last_7"`
 	Recommendation     string  `json:"recommendation"`
 }
+
+// ActionableInsightResponse is returned by GET /moods/actionable-insight.
+// GPT-4o-mini generates one specific, evidence-based weekly experiment suggestion
+// based on the last 14 days of mood data.
+type ActionableInsightResponse struct {
+	Experiment     string   `json:"experiment"`      // "Try going to bed 30 min earlier on Sunday"
+	Pattern        string   `json:"pattern"`         // "Your Monday mood averages 4.2/10 — your worst day for 3 consecutive weeks"
+	Evidence       []string `json:"evidence"`        // last 3 supporting data points (dates + scores)
+	ConfidenceNote string   `json:"confidence_note"` // "Based on 14 days of data"
+	CachedAt       int64    `json:"cached_at"`
+}

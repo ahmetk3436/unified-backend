@@ -124,6 +124,9 @@ func (p *MoodPulsePlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *
 	// Crisis check — DB-only, no AI, no extra rate limit (MUST be before :id catch-all)
 	router.Get("/moods/crisis-check", handler.CrisisCheck)
 
+	// Actionable insight — AI-backed, rate-limited (MUST be before :id catch-all)
+	router.Get("/moods/actionable-insight", aiLimiter, handler.GetActionableInsight)
+
 	// Parameterized routes last
 	router.Get("/moods/:id", handler.Get)
 	router.Put("/moods/:id", handler.Update)

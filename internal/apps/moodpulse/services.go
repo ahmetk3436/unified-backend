@@ -349,6 +349,109 @@ func (s *MoodService) AskMood(appID string, userID uuid.UUID, question string) (
 	return rawContent, nil
 }
 
+// ErrNotEnoughData is returned when there are insufficient data points to generate an insight.
+var ErrNotEnoughData = errors.New("not_enough_data")
+
+// GetActionableInsight fetches 14 days of mood data, computes day-of-week averages,
+// and asks GPT-4o-mini to generate one specific weekly experiment suggestion.
+// Returns a 422-level sentinel error (ErrNotEnoughData) when < 7 days of data exist.
+func (s *MoodService) GetActionableInsight(ctx context.Context, appID string, userID uuid.UUID) (ActionableInsightResponse, error) {
+	since := time.Now().UTC().AddDate(0, 0, -14)
+
+	type dayRow struct {
+		Day string
+		Avg float64
+	}
+
+	var rows []dayRow
+	if err := s.db.WithContext(ctx).
+		Scopes(tenant.ForTenant(appID)).
+		Model(&MoodCheckIn{}).
+		Select("TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, AVG(intensity) AS avg").
+		Where("user_id = ? AND created_at >= ? AND deleted_at IS NULL", userID, since).
+		Group("day").
+		Order("day ASC").
+		Scan(&rows).Error; err != nil {
+		return ActionableInsightResponse{}, fmt.Errorf("fetch mood data: %w", err)
+	}
+
+	if len(rows) < 7 {
+		return ActionableInsightResponse{}, ErrNotEnoughData
+	}
+
+	// Compute day-of-week averages (Monday=0 … Sunday=6 as string key).
+	dowTotals := map[string]float64{}
+	dowCounts := map[string]int{}
+	var summaryLines []string
+	for _, r := range rows {
+		t, err := time.Parse("2006-01-02", r.Day)
+		if err != nil {
+			continue
+		}
+		dow := t.Weekday().String() // "Monday", "Tuesday", etc.
+		dowTotals[dow] += r.Avg
+		dowCounts[dow]++
+		summaryLines = append(summaryLines, fmt.Sprintf("%s: %.1f/10", r.Day, r.Avg))
+	}
+
+	dowAverages := map[string]float64{}
+	for dow, total := range dowTotals {
+		dowAverages[dow] = total / float64(dowCounts[dow])
+	}
+
+	// Build user-readable DOW summary.
+	var dowLines []string
+	for dow, avg := range dowAverages {
+		dowLines = append(dowLines, fmt.Sprintf("%s avg=%.1f/10 (%d days)", dow, avg, dowCounts[dow]))
+	}
+
+	dataSection := "Daily scores (last 14 days):\n" + strings.Join(summaryLines, "\n") +
+		"\n\nDay-of-week averages:\n" + strings.Join(dowLines, "\n")
+
+	systemPrompt := `You are a mood coach analyzing a user's mood tracking data. ` +
+		`Identify the single most actionable pattern and suggest ONE specific small experiment they could try this week. ` +
+		`Return ONLY valid JSON with these exact keys: ` +
+		`{"experiment": "<one sentence under 15 words>", "pattern": "<observed pattern with actual numbers>", ` +
+		`"evidence": ["<date + score>", "<date + score>", "<date + score>"]}. ` +
+		`Be specific. Reference their actual data. No markdown, no extra text.`
+
+	rawContent, err := s.callOpenAIDirect(systemPrompt, dataSection)
+	if err != nil {
+		return ActionableInsightResponse{}, fmt.Errorf("actionable insight ai: %w", err)
+	}
+
+	// Parse the JSON response from GPT.
+	var aiResp struct {
+		Experiment string   `json:"experiment"`
+		Pattern    string   `json:"pattern"`
+		Evidence   []string `json:"evidence"`
+	}
+	if err := json.Unmarshal([]byte(rawContent), &aiResp); err != nil {
+		// If JSON parse fails return the raw content in the experiment field as a graceful fallback.
+		return ActionableInsightResponse{
+			Experiment:     rawContent,
+			Pattern:        "",
+			Evidence:       []string{},
+			ConfidenceNote: fmt.Sprintf("Based on %d days of data", len(rows)),
+			CachedAt:       time.Now().Unix(),
+		}, nil
+	}
+
+	// Cap evidence to 3 items.
+	evidence := aiResp.Evidence
+	if len(evidence) > 3 {
+		evidence = evidence[:3]
+	}
+
+	return ActionableInsightResponse{
+		Experiment:     aiResp.Experiment,
+		Pattern:        aiResp.Pattern,
+		Evidence:       evidence,
+		ConfidenceNote: fmt.Sprintf("Based on %d days of data", len(rows)),
+		CachedAt:       time.Now().Unix(),
+	}, nil
+}
+
 func (s *MoodService) Create(appID string, userID uuid.UUID, req CreateMoodRequest) (*MoodEntryResponse, error) {
 	if req.Emotion.ID == "" || req.Emotion.Name == "" {
 		return nil, ErrMissingEmotion

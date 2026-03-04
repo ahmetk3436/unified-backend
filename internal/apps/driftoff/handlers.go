@@ -538,3 +538,123 @@ func (h *SleepHandler) GetSnoringAnalysis(c *fiber.Ctx) error {
 
 	return c.JSON(resp)
 }
+
+// --- Pre-Sleep Ritual handlers ---
+
+// CreateRitual handles POST /sleeps/ritual
+// Creates or updates a pre-sleep ritual record for the given date.
+func (h *SleepHandler) CreateRitual(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
+	}
+
+	var req CreateRitualRequest
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
+	}
+
+	ritual, err := h.svc.CreateOrUpdateRitual(appID, userID, req)
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	}
+
+	return c.Status(fiber.StatusCreated).JSON(ritual)
+}
+
+// GetRitualCorrelation handles GET /sleeps/ritual-correlation
+// Returns correlation of pre-sleep behaviors with sleep score across all paired nights.
+func (h *SleepHandler) GetRitualCorrelation(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
+	}
+
+	resp, err := h.svc.GetRitualCorrelation(appID, userID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "ritual correlation unavailable")
+	}
+
+	return c.JSON(resp)
+}
+
+// --- CBT-I Program handlers ---
+
+// StartCBTIProgram handles POST /sleeps/cbti/start
+// Enrolls a user in the 6-week CBT-I program. Returns existing enrollment if already active.
+func (h *SleepHandler) StartCBTIProgram(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
+	}
+
+	var req StartCBTIRequest
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
+	}
+
+	resp, err := h.svc.StartCBTIProgram(appID, userID, req)
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	}
+
+	return c.Status(fiber.StatusCreated).JSON(resp)
+}
+
+// GetCBTIStatus handles GET /sleeps/cbti/status
+// Returns the current CBT-I program status for the authenticated user.
+func (h *SleepHandler) GetCBTIStatus(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
+	}
+
+	resp, err := h.svc.GetCBTIStatus(appID, userID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "cbti status unavailable")
+	}
+
+	return c.JSON(resp)
+}
+
+// SubmitCBTICheckIn handles POST /sleeps/cbti/checkin
+// Records a daily check-in and advances the user's week/day counter.
+func (h *SleepHandler) SubmitCBTICheckIn(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
+	}
+
+	var req CBTICheckInRequest
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
+	}
+
+	resp, err := h.svc.SubmitCBTICheckIn(appID, userID, req)
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	}
+
+	return c.Status(fiber.StatusCreated).JSON(resp)
+}
+
+// PauseCBTIProgram handles POST /sleeps/cbti/pause
+// Sets is_active=false on the user's active CBT-I program.
+func (h *SleepHandler) PauseCBTIProgram(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
+	}
+
+	if err := h.svc.PauseCBTIProgram(appID, userID); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	}
+
+	return c.JSON(fiber.Map{"message": "cbti program paused"})
+}

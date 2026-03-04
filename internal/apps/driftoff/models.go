@@ -301,6 +301,106 @@ type LifestyleCorrelationResponse struct {
 	ExerciseCorrelation *ExerciseCorrelationResult `json:"exercise_correlation"`
 }
 
+// --- Pre-Sleep Ritual ---
+
+// SleepRitual records pre-bed behavioral factors for a single night.
+type SleepRitual struct {
+	gorm.Model
+	AppID              string `gorm:"size:50;not null;uniqueIndex:idx_sleep_ritual_app_user_date" json:"-"`
+	UserID             uuid.UUID `gorm:"type:uuid;uniqueIndex:idx_sleep_ritual_app_user_date" json:"-"`
+	Date               string `gorm:"size:10;uniqueIndex:idx_sleep_ritual_app_user_date;not null" json:"date"` // YYYY-MM-DD
+	HadAlcohol         bool   `json:"had_alcohol"`
+	LastDrinkHoursAgo  *int   `json:"last_drink_hours_ago"` // nil if had_alcohol=false
+	LastMealHoursAgo   int    `json:"last_meal_hours_ago"`  // hours before bed
+	ScreenTimeMin      int    `json:"screen_time_min"`      // minutes of screen time in last 60 min before bed
+	ExercisedToday     bool   `json:"exercised_today"`
+	ExerciseHoursAgo   *int   `json:"exercise_hours_ago"` // nil if exercised=false
+	Notes              string `json:"notes" gorm:"size:500"`
+}
+
+type CreateRitualRequest struct {
+	Date              string `json:"date"`
+	HadAlcohol        bool   `json:"had_alcohol"`
+	LastDrinkHoursAgo *int   `json:"last_drink_hours_ago"`
+	LastMealHoursAgo  int    `json:"last_meal_hours_ago"`
+	ScreenTimeMin     int    `json:"screen_time_min"`
+	ExercisedToday    bool   `json:"exercised_today"`
+	ExerciseHoursAgo  *int   `json:"exercise_hours_ago"`
+	Notes             string `json:"notes"`
+}
+
+type RitualImpactItem struct {
+	FactorName    string  `json:"factor_name"`
+	WithFactor    float64 `json:"with_factor"`    // avg sleep score with this factor
+	WithoutFactor float64 `json:"without_factor"` // avg sleep score without this factor
+	DeltaPct      float64 `json:"delta_pct"`      // percentage difference
+	SampleSize    int     `json:"sample_size"`
+	Insight       string  `json:"insight"`
+}
+
+type RitualCorrelationResponse struct {
+	HasEnoughData    bool              `json:"has_enough_data"` // needs 14+ paired nights
+	AlcoholImpact    *RitualImpactItem `json:"alcohol_impact,omitempty"`
+	ScreenTimeImpact *RitualImpactItem `json:"screen_time_impact,omitempty"`
+	ExerciseImpact   *RitualImpactItem `json:"exercise_impact,omitempty"`
+	LateEatingImpact *RitualImpactItem `json:"late_eating_impact,omitempty"`
+	TopInsight       string            `json:"top_insight"`
+	DataPoints       int               `json:"data_points"`
+}
+
+// --- CBT-I Program ---
+
+// CBTIProgress tracks a user's progress through the 6-week CBT-I program.
+type CBTIProgress struct {
+	gorm.Model
+	AppID            string    `gorm:"size:50;not null;uniqueIndex:idx_cbti_app_user;not null" json:"-"`
+	UserID           uuid.UUID `gorm:"type:uuid;uniqueIndex:idx_cbti_app_user;not null" json:"-"`
+	StartDate        string    `json:"start_date"`         // YYYY-MM-DD when program started
+	CurrentWeek      int       `json:"current_week"`       // 1-6
+	CurrentDay       int       `json:"current_day"`        // 1-7
+	SleepWindowStart string    `gorm:"size:5" json:"sleep_window_start"` // "23:30" — target bedtime
+	SleepWindowEnd   string    `gorm:"size:5" json:"sleep_window_end"`   // "06:30" — target wake time
+	CompletedDays    int       `json:"completed_days"`     // total check-ins completed
+	IsActive         bool      `json:"is_active"`
+	CompletedAt      *string   `json:"completed_at,omitempty"` // ISO date when completed
+}
+
+// CBTIDayCheckIn records a single daily check-in for the CBT-I program.
+type CBTIDayCheckIn struct {
+	gorm.Model
+	AppID      string    `gorm:"size:50;not null;index" json:"-"`
+	UserID     uuid.UUID `gorm:"type:uuid;not null;index" json:"-"`
+	Date       string    `gorm:"size:10;not null" json:"date"`
+	Week       int       `json:"week"`
+	DidFollow  bool      `json:"did_follow"` // did they follow the sleep window?
+	Notes      string    `json:"notes" gorm:"size:500"`
+	SleepScore *float64  `json:"sleep_score"` // from that night's session if available
+}
+
+type CBTIStatusResponse struct {
+	IsEnrolled       bool    `json:"is_enrolled"`
+	CurrentWeek      int     `json:"current_week"`
+	CurrentDay       int     `json:"current_day"`
+	StartDate        string  `json:"start_date,omitempty"`
+	SleepWindowStart string  `json:"sleep_window_start,omitempty"`
+	SleepWindowEnd   string  `json:"sleep_window_end,omitempty"`
+	CompletedDays    int     `json:"completed_days"`
+	AdherencePct     float64 `json:"adherence_pct"` // % of check-ins where did_follow=true
+	WeeklyInsight    string  `json:"weekly_insight"`
+	IsCompleted      bool    `json:"is_completed"`
+	CompletedAt      string  `json:"completed_at,omitempty"`
+}
+
+type StartCBTIRequest struct {
+	SleepWindowStart string `json:"sleep_window_start"` // "23:30"
+	SleepWindowEnd   string `json:"sleep_window_end"`   // "06:30"
+}
+
+type CBTICheckInRequest struct {
+	DidFollow bool   `json:"did_follow"`
+	Notes     string `json:"notes"`
+}
+
 // --- Daytime Alertness (UMD 2026 clinical trial pattern) ---
 
 // AlertnessLog records a single daytime alertness/energy check-in.
