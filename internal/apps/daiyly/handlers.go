@@ -109,6 +109,9 @@ func (h *JournalHandler) List(c *fiber.Ctx) error {
 
 	limit, _ := strconv.Atoi(c.Query("limit", "20"))
 	offset, _ := strconv.Atoi(c.Query("offset", "0"))
+	if limit < 1 {
+		limit = 1
+	}
 	if limit > 100 {
 		limit = 100
 	}

@@ -178,6 +178,14 @@ func (h *RemoteConfigHandler) DeleteConfigKey(c *fiber.Ctx) error {
 		})
 	}
 
+	appIDStr, ok := appID.(string)
+	if !ok {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error":   true,
+			"message": "Internal error: invalid app context",
+		})
+	}
+
 	key := c.Params("key")
 	if key == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -186,7 +194,7 @@ func (h *RemoteConfigHandler) DeleteConfigKey(c *fiber.Ctx) error {
 		})
 	}
 
-	if err := h.db.Where("app_id = ? AND key = ?", appID, key).Delete(&models.RemoteConfig{}).Error; err != nil {
+	if err := h.db.Where("app_id = ? AND key = ?", appIDStr, key).Delete(&models.RemoteConfig{}).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error":   true,
 			"message": "Failed to delete config",

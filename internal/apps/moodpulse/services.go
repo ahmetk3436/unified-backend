@@ -623,12 +623,16 @@ func (s *MoodService) Search(appID string, userID uuid.UUID, q string) (*SearchM
 	if len(q) > 100 {
 		q = q[:100]
 	}
-	pattern := "%" + strings.ToLower(q) + "%"
+	// Escape LIKE wildcards so user-supplied % and _ are treated as literals.
+	escaped := strings.ReplaceAll(q, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `%`, `\%`)
+	escaped = strings.ReplaceAll(escaped, `_`, `\_`)
+	pattern := "%" + strings.ToLower(escaped) + "%"
 
 	var entries []MoodCheckIn
 	if err := s.db.Scopes(tenant.ForTenant(appID)).
 		Where("user_id = ?", userID).
-		Where("LOWER(note) LIKE ? OR LOWER(emotion_name) LIKE ? OR LOWER(triggers_json) LIKE ? OR LOWER(activities_json) LIKE ?",
+		Where("LOWER(note) LIKE ? ESCAPE '\\' OR LOWER(emotion_name) LIKE ? ESCAPE '\\' OR LOWER(triggers_json) LIKE ? ESCAPE '\\' OR LOWER(activities_json) LIKE ? ESCAPE '\\'",
 			pattern, pattern, pattern, pattern).
 		Order("created_at DESC").
 		Limit(50).
@@ -1395,6 +1399,15 @@ func (s *VocabularyService) UpsertEmotion(appID string, userID uuid.UUID, req Cr
 	if req.Name == "" || req.Emoji == "" || req.Color == "" {
 		return nil, errors.New("name, emoji, and color are required")
 	}
+	if len(req.Name) > 50 {
+		return nil, errors.New("name must be at most 50 characters")
+	}
+	if len(req.Emoji) > 10 {
+		return nil, errors.New("emoji must be at most 10 characters")
+	}
+	if len(req.Color) > 20 {
+		return nil, errors.New("color must be at most 20 characters")
+	}
 	item := CustomEmotion{
 		AppID:  appID,
 		UserID: userID,
@@ -1442,8 +1455,14 @@ func (s *VocabularyService) UpsertTrigger(appID string, userID uuid.UUID, req Cr
 	if req.Name == "" {
 		return nil, errors.New("name is required")
 	}
+	if len(req.Name) > 50 {
+		return nil, errors.New("name must be at most 50 characters")
+	}
 	if req.Icon == "" {
 		req.Icon = "flash-outline"
+	}
+	if len(req.Icon) > 50 {
+		return nil, errors.New("icon must be at most 50 characters")
 	}
 	item := CustomTrigger{
 		AppID:  appID,
@@ -1490,8 +1509,14 @@ func (s *VocabularyService) UpsertActivity(appID string, userID uuid.UUID, req C
 	if req.Name == "" {
 		return nil, errors.New("name is required")
 	}
+	if len(req.Name) > 50 {
+		return nil, errors.New("name must be at most 50 characters")
+	}
 	if req.Icon == "" {
 		req.Icon = "ellipse-outline"
+	}
+	if len(req.Icon) > 50 {
+		return nil, errors.New("icon must be at most 50 characters")
 	}
 	item := CustomActivity{
 		AppID:  appID,
