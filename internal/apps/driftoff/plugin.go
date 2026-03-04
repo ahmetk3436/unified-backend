@@ -49,6 +49,7 @@ func (p *DriftoffPlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *c
 	router.Get("/sleeps/sound-correlation", handler.GetSoundCorrelation)
 	router.Get("/sleeps/temp-correlation", handler.GetTempCorrelation)
 	router.Get("/sleeps/cbti-insights", handler.GetCBTIInsights)
+	router.Get("/sleeps/lifestyle-correlation", handler.GetLifestyleCorrelation)
 
 	// Parameterized routes (MUST be last)
 	router.Get("/sleeps/:id", handler.Get)

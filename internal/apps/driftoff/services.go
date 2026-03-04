@@ -1383,3 +1383,152 @@ func (s *SleepService) GetCBTIInsights(appID string, userID uuid.UUID) (*CBTIIns
 
 	return resp, nil
 }
+
+// avgIntSlice returns the mean of a non-empty int slice.
+func avgIntSlice(vals []int) float64 {
+	if len(vals) == 0 {
+		return 0
+	}
+	s := 0
+	for _, v := range vals {
+		s += v
+	}
+	return float64(s) / float64(len(vals))
+}
+
+// avgFloat64Slice returns the mean of a non-empty float64 slice.
+func avgFloat64Slice(vals []float64) float64 {
+	if len(vals) == 0 {
+		return 0
+	}
+	sum := 0.0
+	for _, v := range vals {
+		sum += v
+	}
+	return sum / float64(len(vals))
+}
+
+// GetLifestyleCorrelation computes correlations between:
+//   - caffeine timing (after/before 3 pm) and sleep onset latency
+//   - exercise (≥30 min / <30 min) and sleep efficiency
+//
+// Returns nil fields when insufficient paired data exists (<3 nights per group).
+// Pure Go math — no AI, no external calls.
+func (s *SleepService) GetLifestyleCorrelation(appID string, userID uuid.UUID) (*LifestyleCorrelationResponse, error) {
+	const minNights = 7
+	const minGroup = 3
+
+	// 1. Fetch last 30 sleep sessions.
+	var sessions []SleepSession
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ?", userID).
+		Order("bedtime DESC").
+		Limit(30).
+		Find(&sessions).Error; err != nil {
+		return nil, fmt.Errorf("fetch sessions: %w", err)
+	}
+
+	resp := &LifestyleCorrelationResponse{
+		DataPoints:    len(sessions),
+		MinDataPoints: minNights,
+	}
+	if len(sessions) < minNights {
+		return resp, nil
+	}
+
+	// 2. Fetch caffeine logs for the relevant date range.
+	oldest := sessions[len(sessions)-1].Bedtime.AddDate(0, 0, -1)
+	var caffeineLogs []DailyCaffeineLog
+	if err := s.db.
+		Where("app_id = ? AND user_id = ? AND log_date >= ?", appID, userID, oldest).
+		Find(&caffeineLogs).Error; err != nil {
+		return nil, fmt.Errorf("fetch caffeine logs: %w", err)
+	}
+
+	// 3. Build date-keyed map.
+	cafMap := make(map[string]*DailyCaffeineLog, len(caffeineLogs))
+	for i := range caffeineLogs {
+		key := caffeineLogs[i].LogDate.Format("2006-01-02")
+		cafMap[key] = &caffeineLogs[i]
+	}
+
+	// 4. Collect grouped metrics.
+	var latencyAfter, latencyBefore []int
+	var effWithEx, effWithoutEx []float64
+
+	for _, sess := range sessions {
+		key := sess.Bedtime.Format("2006-01-02")
+		log, ok := cafMap[key]
+		if !ok {
+			continue
+		}
+		// Caffeine timing.
+		if log.LastCupAt != nil {
+			if log.LastCupAt.Hour() >= 15 {
+				latencyAfter = append(latencyAfter, sess.LatencyMinutes)
+			} else {
+				latencyBefore = append(latencyBefore, sess.LatencyMinutes)
+			}
+		}
+		// Exercise.
+		if log.ExerciseMin >= 30 {
+			effWithEx = append(effWithEx, sess.Efficiency)
+		} else {
+			effWithoutEx = append(effWithoutEx, sess.Efficiency)
+		}
+	}
+
+	// 5. Compute caffeine correlation.
+	if len(latencyAfter) >= minGroup && len(latencyBefore) >= minGroup {
+		avgAfter := avgIntSlice(latencyAfter)
+		avgBefore := avgIntSlice(latencyBefore)
+		diff := math.Round((avgAfter-avgBefore)*10) / 10
+
+		var insight string
+		switch {
+		case diff > 10:
+			insight = fmt.Sprintf("Caffeine after 3 pm adds ~%.0f min to your sleep onset.", avgAfter-avgBefore)
+		case diff < -5:
+			insight = "No late-caffeine penalty detected in your data."
+		default:
+			insight = "Not enough contrast between early and late caffeine nights yet."
+		}
+
+		resp.CaffeineCorrelation = &CaffeineCorrelationResult{
+			AvgLatencyAfter3pmMin:  math.Round(avgAfter*10) / 10,
+			AvgLatencyBefore3pmMin: math.Round(avgBefore*10) / 10,
+			DiffMinutes:            diff,
+			NightsAfter3pm:         len(latencyAfter),
+			NightsBefore3pm:        len(latencyBefore),
+			Insight:                insight,
+		}
+	}
+
+	// 6. Compute exercise correlation.
+	if len(effWithEx) >= minGroup && len(effWithoutEx) >= minGroup {
+		avgWith := avgFloat64Slice(effWithEx)
+		avgWithout := avgFloat64Slice(effWithoutEx)
+		diff := math.Round((avgWith-avgWithout)*10) / 10
+
+		var insight string
+		switch {
+		case diff > 5:
+			insight = fmt.Sprintf("30+ min exercise days show +%.0f%% better sleep efficiency.", avgWith-avgWithout)
+		case diff < -5:
+			insight = "Consider lighter or earlier exercise — intense late workouts may be disrupting your sleep."
+		default:
+			insight = "Exercise has a neutral effect on your sleep efficiency so far."
+		}
+
+		resp.ExerciseCorrelation = &ExerciseCorrelationResult{
+			AvgEffWithExercisePct:    math.Round(avgWith*10) / 10,
+			AvgEffWithoutExercisePct: math.Round(avgWithout*10) / 10,
+			DiffPercent:              diff,
+			NightsWithExercise:       len(effWithEx),
+			NightsWithoutExercise:    len(effWithoutEx),
+			Insight:                  insight,
+		}
+	}
+
+	return resp, nil
+}

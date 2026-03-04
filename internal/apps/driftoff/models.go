@@ -237,3 +237,30 @@ type CBTIRecommendation struct {
 type CBTIInsightsResponse struct {
 	Recommendations []CBTIRecommendation `json:"recommendations"`
 }
+
+// --- Lifestyle Correlation (caffeine + exercise) ---
+
+type CaffeineCorrelationResult struct {
+	AvgLatencyAfter3pmMin  float64 `json:"avg_latency_after_3pm_min"`
+	AvgLatencyBefore3pmMin float64 `json:"avg_latency_before_3pm_min"`
+	DiffMinutes            float64 `json:"diff_minutes"`
+	NightsAfter3pm         int     `json:"nights_after_3pm"`
+	NightsBefore3pm        int     `json:"nights_before_3pm"`
+	Insight                string  `json:"insight"`
+}
+
+type ExerciseCorrelationResult struct {
+	AvgEffWithExercisePct    float64 `json:"avg_efficiency_with_exercise_pct"`
+	AvgEffWithoutExercisePct float64 `json:"avg_efficiency_without_exercise_pct"`
+	DiffPercent              float64 `json:"diff_percent"`
+	NightsWithExercise       int     `json:"nights_with_exercise"`
+	NightsWithoutExercise    int     `json:"nights_without_exercise"`
+	Insight                  string  `json:"insight"`
+}
+
+type LifestyleCorrelationResponse struct {
+	DataPoints          int                        `json:"data_points"`
+	MinDataPoints       int                        `json:"min_data_points"`
+	CaffeineCorrelation *CaffeineCorrelationResult `json:"caffeine_correlation"`
+	ExerciseCorrelation *ExerciseCorrelationResult `json:"exercise_correlation"`
+}
