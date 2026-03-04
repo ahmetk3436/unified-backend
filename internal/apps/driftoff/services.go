@@ -1223,7 +1223,16 @@ func (s *SleepService) GetSoundCorrelation(appID string, userID uuid.UUID) (*Sou
 	for _, r := range rows {
 		m[r.Soundscape] = r.AvgEff
 	}
-	return &SoundCorrelationResponse{Correlations: m}, nil
+
+	var nightCount int64
+	s.db.Raw(
+		"SELECT COUNT(*) FROM sleep_sessions "+
+			"WHERE app_id = ? AND user_id = ? AND soundscape_played IS NOT NULL AND soundscape_played != '' "+
+			"AND deleted_at IS NULL",
+		appID, userID,
+	).Scan(&nightCount)
+
+	return &SoundCorrelationResponse{Correlations: m, NightCount: int(nightCount)}, nil
 }
 
 // GetTempCorrelation returns average sleep score per room temperature (only temperatures
@@ -1250,7 +1259,16 @@ func (s *SleepService) GetTempCorrelation(appID string, userID uuid.UUID) (*Temp
 	for _, r := range rows {
 		m[r.RoomTemp] = r.AvgScore
 	}
-	return &TempCorrelationResponse{Correlations: m}, nil
+
+	var nightCount int64
+	s.db.Raw(
+		"SELECT COUNT(*) FROM sleep_sessions "+
+			"WHERE app_id = ? AND user_id = ? AND room_temp IS NOT NULL AND room_temp != '' "+
+			"AND deleted_at IS NULL",
+		appID, userID,
+	).Scan(&nightCount)
+
+	return &TempCorrelationResponse{Correlations: m, NightCount: int(nightCount)}, nil
 }
 
 // GetCBTIInsights analyzes the user's sleep sessions and returns clinically-validated

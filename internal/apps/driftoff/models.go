@@ -216,12 +216,14 @@ type HygieneScoreResponse struct {
 
 type SoundCorrelationResponse struct {
 	Correlations map[string]float64 `json:"correlations"` // soundscape -> avg efficiency%
+	NightCount   int                `json:"night_count"`  // total sessions with a soundscape logged
 }
 
 // --- Temperature Correlation ---
 
 type TempCorrelationResponse struct {
 	Correlations map[string]float64 `json:"correlations"` // room_temp -> avg score
+	NightCount   int                `json:"night_count"`  // total sessions with a room_temp logged
 }
 
 // --- CBT-I Insights ---
