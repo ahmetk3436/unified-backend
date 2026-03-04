@@ -459,3 +459,62 @@ func (h *SleepHandler) GetLifestyleCorrelation(c *fiber.Ctx) error {
 
 	return c.JSON(resp)
 }
+
+// LogAlertness handles POST /sleeps/alertness
+// Records a single daytime alertness/energy check-in (level 1-5).
+func (h *SleepHandler) LogAlertness(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
+	}
+
+	var req LogAlertnessRequest
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid body")
+	}
+	if req.Level < 1 || req.Level > 5 {
+		return fiber.NewError(fiber.StatusBadRequest, "level must be between 1 and 5")
+	}
+
+	loggedAt := time.Now().UTC()
+	if req.LoggedAt != "" {
+		if t, err := time.Parse(time.RFC3339, req.LoggedAt); err == nil {
+			loggedAt = t
+		} else {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid logged_at format (use RFC3339)")
+		}
+	}
+
+	resp, err := h.svc.LogAlertness(appID, userID, req.Level, loggedAt)
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	}
+
+	return c.Status(fiber.StatusCreated).JSON(resp)
+}
+
+// GetAlertnessLogs handles GET /sleeps/alertness
+// Returns daytime alertness logs for the last N days with daily average and peak/trough hours.
+func (h *SleepHandler) GetAlertnessLogs(c *fiber.Ctx) error {
+	appID := tenant.GetAppID(c)
+	userID, err := tenant.GetUserID(c)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid auth")
+	}
+
+	days, _ := strconv.Atoi(c.Query("days", "7"))
+	if days < 1 {
+		days = 1
+	}
+	if days > 90 {
+		days = 90
+	}
+
+	resp, err := h.svc.GetAlertnessLogs(appID, userID, days)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "alertness logs unavailable")
+	}
+
+	return c.JSON(resp)
+}

@@ -19,6 +19,7 @@ func (p *DriftoffPlugin) Models() []interface{} {
 		&SleepSession{},
 		&SleepStreak{},
 		&DailyCaffeineLog{},
+		&AlertnessLog{},
 	}
 }
 
@@ -51,6 +52,10 @@ func (p *DriftoffPlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *c
 	router.Get("/sleeps/cbti-insights", handler.GetCBTIInsights)
 	router.Get("/sleeps/lifestyle-correlation", handler.GetLifestyleCorrelation)
 	router.Get("/sleeps/sri", handler.GetSleepRegularityIndex)
+
+	// Daytime alertness check-ins (UMD 2026 clinical trial pattern)
+	router.Post("/sleeps/alertness", handler.LogAlertness)
+	router.Get("/sleeps/alertness", handler.GetAlertnessLogs)
 
 	// Parameterized routes (MUST be last)
 	router.Get("/sleeps/:id", handler.Get)

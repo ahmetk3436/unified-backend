@@ -1653,3 +1653,79 @@ func (s *SleepService) GetLifestyleCorrelation(appID string, userID uuid.UUID) (
 
 	return resp, nil
 }
+
+// LogAlertness records a single daytime alertness check-in.
+func (s *SleepService) LogAlertness(appID string, userID uuid.UUID, level int, loggedAt time.Time) (*AlertnessLogResponse, error) {
+	if level < 1 || level > 5 {
+		return nil, errors.New("level must be between 1 and 5")
+	}
+	log := AlertnessLog{
+		AppID:    appID,
+		UserID:   userID,
+		Level:    level,
+		LoggedAt: loggedAt,
+	}
+	if err := s.db.Scopes(tenant.ForTenant(appID)).Create(&log).Error; err != nil {
+		return nil, errors.New("storage error")
+	}
+	return &AlertnessLogResponse{
+		ID:       log.ID,
+		Level:    log.Level,
+		LoggedAt: log.LoggedAt.UTC().Format(time.RFC3339),
+	}, nil
+}
+
+// GetAlertnessLogs returns alertness logs for the last N days with daily average and peak/trough hours.
+func (s *SleepService) GetAlertnessLogs(appID string, userID uuid.UUID, days int) (*AlertnessListResponse, error) {
+	since := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
+
+	var logs []AlertnessLog
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ? AND logged_at >= ?", userID, since).
+		Order("logged_at ASC").
+		Find(&logs).Error; err != nil {
+		return nil, errors.New("storage error")
+	}
+
+	resp := &AlertnessListResponse{Days: days}
+	if len(logs) == 0 {
+		return resp, nil
+	}
+
+	// Build response logs + compute averages
+	resp.Logs = make([]AlertnessLogResponse, len(logs))
+	totalLevel := 0
+	hourSum := make(map[int]int)
+	hourCount := make(map[int]int)
+	for i, l := range logs {
+		resp.Logs[i] = AlertnessLogResponse{
+			ID:       l.ID,
+			Level:    l.Level,
+			LoggedAt: l.LoggedAt.UTC().Format(time.RFC3339),
+		}
+		totalLevel += l.Level
+		h := l.LoggedAt.UTC().Hour()
+		hourSum[h] += l.Level
+		hourCount[h]++
+	}
+	resp.DailyAvg = math.Round(float64(totalLevel)/float64(len(logs))*10) / 10
+
+	// Find peak (highest avg) and trough (lowest avg) hours
+	peakHour, troughHour := -1, -1
+	var peakAvg, troughAvg float64
+	for h, sum := range hourSum {
+		avg := float64(sum) / float64(hourCount[h])
+		if peakHour < 0 || avg > peakAvg {
+			peakHour = h
+			peakAvg = avg
+		}
+		if troughHour < 0 || avg < troughAvg {
+			troughHour = h
+			troughAvg = avg
+		}
+	}
+	resp.PeakHour = peakHour
+	resp.TroughHour = troughHour
+
+	return resp, nil
+}

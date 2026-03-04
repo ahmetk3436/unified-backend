@@ -279,3 +279,34 @@ type LifestyleCorrelationResponse struct {
 	CaffeineCorrelation *CaffeineCorrelationResult `json:"caffeine_correlation"`
 	ExerciseCorrelation *ExerciseCorrelationResult `json:"exercise_correlation"`
 }
+
+// --- Daytime Alertness (UMD 2026 clinical trial pattern) ---
+
+// AlertnessLog records a single daytime alertness/energy check-in.
+type AlertnessLog struct {
+	ID        uuid.UUID `gorm:"type:uuid;default:gen_random_uuid();primaryKey" json:"id"`
+	AppID     string    `gorm:"size:50;not null;index" json:"app_id"`
+	UserID    uuid.UUID `gorm:"type:uuid;not null;index" json:"user_id"`
+	Level     int       `gorm:"not null" json:"level"`     // 1-5: 1=very tired, 5=very alert
+	LoggedAt  time.Time `gorm:"not null" json:"logged_at"` // when the check-in occurred
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type LogAlertnessRequest struct {
+	Level    int    `json:"level"`     // 1–5
+	LoggedAt string `json:"logged_at"` // RFC3339
+}
+
+type AlertnessLogResponse struct {
+	ID       uuid.UUID `json:"id"`
+	Level    int       `json:"level"`
+	LoggedAt string    `json:"logged_at"`
+}
+
+type AlertnessListResponse struct {
+	Logs        []AlertnessLogResponse `json:"logs"`
+	Days        int                    `json:"days"`
+	DailyAvg    float64                `json:"daily_avg"`    // average level over the period
+	PeakHour    int                    `json:"peak_hour"`    // hour of day (0-23) with highest avg level
+	TroughHour  int                    `json:"trough_hour"`  // hour of day with lowest avg level
+}
