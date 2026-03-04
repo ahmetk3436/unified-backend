@@ -170,7 +170,7 @@ func (p *DaiylyPlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *con
 	// Protected by JWT (upstream middleware) + per-user rate limiters above.
 	// Use cfg.UploadsRoot (set via UPLOADS_ROOT env var) so the path is correct
 	// regardless of the process working directory. Defaults to "./uploads".
-	uploadHandler := NewUploadHandler(cfg.OpenAIAPIKey, cfg.AITimeout, cfg.UploadsRoot)
+	uploadHandler := NewUploadHandler(cfg.OpenAIAPIKey, cfg.FalAPIKey, cfg.AITimeout, cfg.UploadsRoot)
 	router.Post("/journals/upload-photo", uploadPhotoLimiter, uploadHandler.UploadPhoto)
 	router.Post("/journals/transcribe", transcribeLimiter, uploadHandler.Transcribe)
 

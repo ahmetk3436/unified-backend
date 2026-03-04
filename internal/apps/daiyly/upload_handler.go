@@ -2,6 +2,7 @@ package daiyly
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,6 +25,7 @@ const (
 	audioMaxBytes = 25 * 1024 * 1024 // 25 MB
 
 	openAIWhisperURL = "https://api.openai.com/v1/audio/transcriptions"
+	falWhisperURL    = "https://fal.run/fal-ai/whisper"
 	baseUploadURL    = "https://api.vexellabspro.com"
 )
 
@@ -46,13 +48,15 @@ var allowedAudioMIME = map[string]string{
 // UploadHandler handles file upload and transcription endpoints.
 type UploadHandler struct {
 	openAIAPIKey string
+	falAPIKey    string
 	aiTimeout    time.Duration
 	uploadsRoot  string // absolute path to uploads directory on disk
 }
 
-func NewUploadHandler(openAIAPIKey string, aiTimeout time.Duration, uploadsRoot string) *UploadHandler {
+func NewUploadHandler(openAIAPIKey, falAPIKey string, aiTimeout time.Duration, uploadsRoot string) *UploadHandler {
 	return &UploadHandler{
 		openAIAPIKey: openAIAPIKey,
+		falAPIKey:    falAPIKey,
 		aiTimeout:    aiTimeout,
 		uploadsRoot:  uploadsRoot,
 	}
@@ -154,8 +158,8 @@ func (h *UploadHandler) Transcribe(c *fiber.Ctx) error {
 		})
 	}
 
-	if h.openAIAPIKey == "" {
-		slog.Error("transcribe: OPENAI_API_KEY not configured")
+	if h.openAIAPIKey == "" && h.falAPIKey == "" {
+		slog.Error("transcribe: no transcription provider configured (OPENAI_API_KEY or FAL_API_KEY required)")
 		return c.Status(fiber.StatusServiceUnavailable).JSON(dto.ErrorResponse{
 			Error: true, Message: "transcription service not available",
 		})
@@ -208,9 +212,15 @@ func (h *UploadHandler) Transcribe(c *fiber.Ctx) error {
 		})
 	}
 
-	transcript, err := h.callWhisper(data, ext)
-	if err != nil {
-		slog.Error("transcribe: OpenAI Whisper call failed", "error", err)
+	var transcript string
+	var transcriptErr error
+	if h.openAIAPIKey != "" {
+		transcript, transcriptErr = h.callWhisper(data, ext)
+	} else {
+		transcript, transcriptErr = h.callFalWhisper(data, ext)
+	}
+	if transcriptErr != nil {
+		slog.Error("transcribe: failed", "provider", map[bool]string{true: "openai", false: "fal"}[h.openAIAPIKey != ""], "error", transcriptErr)
 		return c.Status(fiber.StatusInternalServerError).JSON(dto.ErrorResponse{
 			Error: true, Message: "transcription failed",
 		})
@@ -281,6 +291,72 @@ func (h *UploadHandler) callWhisper(audioData []byte, ext string) (string, error
 	}
 
 	return strings.TrimSpace(whisperResp.Text), nil
+}
+
+// callFalWhisper transcribes audio using the Fal.ai Whisper endpoint.
+// Used as fallback when OPENAI_API_KEY is not set.
+// Sends the audio as a base64 data URI in the request body.
+func (h *UploadHandler) callFalWhisper(audioData []byte, ext string) (string, error) {
+	// Determine MIME type for the data URI.
+	mimeMap := map[string]string{
+		"m4a":  "audio/m4a",
+		"mp3":  "audio/mpeg",
+		"wav":  "audio/wav",
+		"aac":  "audio/aac",
+		"webm": "audio/webm",
+	}
+	mime, ok := mimeMap[ext]
+	if !ok {
+		mime = "audio/m4a"
+	}
+
+	encoded := base64.StdEncoding.EncodeToString(audioData)
+	audioURL := "data:" + mime + ";base64," + encoded
+
+	payload, err := json.Marshal(map[string]any{
+		"audio_url": audioURL,
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshal fal payload: %w", err)
+	}
+
+	timeout := h.aiTimeout
+	if timeout == 0 {
+		timeout = 120 * time.Second // Fal.ai may take longer for large files
+	}
+
+	httpClient := &http.Client{Timeout: timeout}
+	req, err := http.NewRequest(http.MethodPost, falWhisperURL, bytes.NewReader(payload))
+	if err != nil {
+		return "", fmt.Errorf("create fal request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Key "+h.falAPIKey)
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fal http do: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024)) // 2MB cap
+	if err != nil {
+		return "", fmt.Errorf("read fal response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("fal whisper returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Fal.ai Whisper response: {"text": "...", "chunks": [...]}
+	var falResp struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(body, &falResp); err != nil {
+		return "", fmt.Errorf("parse fal whisper response: %w", err)
+	}
+
+	return strings.TrimSpace(falResp.Text), nil
 }
 
 // validatePhotoMagic checks that the file bytes match the declared MIME type.
