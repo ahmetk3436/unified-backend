@@ -370,6 +370,26 @@ func (s *MoodService) Create(appID string, userID uuid.UUID, req CreateMoodReque
 		return nil, errors.New("transcript too long (max 50000 characters)")
 	}
 
+	// Validate and cap new context/medication fields.
+	validWhere := map[string]bool{"home": true, "work": true, "outside": true, "commuting": true, "social": true, "gym": true}
+	validWith := map[string]bool{"alone": true, "partner": true, "friends": true, "family": true, "colleagues": true, "strangers": true}
+	validActivity := map[string]bool{"working": true, "relaxing": true, "exercising": true, "eating": true, "socializing": true, "commuting": true}
+	if req.WhereContext != nil && *req.WhereContext != "" && !validWhere[*req.WhereContext] {
+		return nil, errors.New("invalid where_context value")
+	}
+	if req.WithContext != nil && *req.WithContext != "" && !validWith[*req.WithContext] {
+		return nil, errors.New("invalid with_context value")
+	}
+	if req.ActivityContext != nil && *req.ActivityContext != "" && !validActivity[*req.ActivityContext] {
+		return nil, errors.New("invalid activity_context value")
+	}
+	if req.SubEmotion != nil && len(*req.SubEmotion) > 50 {
+		return nil, errors.New("sub_emotion too long (max 50 characters)")
+	}
+	if req.MedName != nil && len(*req.MedName) > 100 {
+		return nil, errors.New("med_name too long (max 100 characters)")
+	}
+
 	triggersJSON, _ := json.Marshal(req.Triggers)
 	activitiesJSON, _ := json.Marshal(req.Activities)
 
@@ -539,21 +559,39 @@ func (s *MoodService) Update(appID string, userID uuid.UUID, id uuid.UUID, req U
 		entry.Transcript = req.Transcript
 	}
 	if req.WhereContext != nil {
+		validWhereUpd := map[string]bool{"home": true, "work": true, "outside": true, "commuting": true, "social": true, "gym": true}
+		if *req.WhereContext != "" && !validWhereUpd[*req.WhereContext] {
+			return nil, errors.New("invalid where_context value")
+		}
 		entry.WhereContext = req.WhereContext
 	}
 	if req.WithContext != nil {
+		validWithUpd := map[string]bool{"alone": true, "partner": true, "friends": true, "family": true, "colleagues": true, "strangers": true}
+		if *req.WithContext != "" && !validWithUpd[*req.WithContext] {
+			return nil, errors.New("invalid with_context value")
+		}
 		entry.WithContext = req.WithContext
 	}
 	if req.ActivityContext != nil {
+		validActivityUpd := map[string]bool{"working": true, "relaxing": true, "exercising": true, "eating": true, "socializing": true, "commuting": true}
+		if *req.ActivityContext != "" && !validActivityUpd[*req.ActivityContext] {
+			return nil, errors.New("invalid activity_context value")
+		}
 		entry.ActivityContext = req.ActivityContext
 	}
 	if req.SubEmotion != nil {
+		if len(*req.SubEmotion) > 50 {
+			return nil, errors.New("sub_emotion too long (max 50 characters)")
+		}
 		entry.SubEmotion = req.SubEmotion
 	}
 	if req.MedTaken != nil {
 		entry.MedTaken = req.MedTaken
 	}
 	if req.MedName != nil {
+		if len(*req.MedName) > 100 {
+			return nil, errors.New("med_name too long (max 100 characters)")
+		}
 		entry.MedName = req.MedName
 	}
 
@@ -1595,9 +1633,13 @@ func (s *VocabularyService) BulkSync(appID string, userID uuid.UUID, req BulkSyn
 func (s *MoodService) GetContextInsights(appID string, userID uuid.UUID, days int) (*ContextInsightsResponse, error) {
 	since := time.Now().UTC().AddDate(0, 0, -days)
 
-	type row struct {
-		Context string
-		Avg     float64
+	// allowedContextColumns is the complete set of column names that buildMap may
+	// query. The col string is interpolated directly into raw SQL, so we must
+	// validate it against this allowlist before use to prevent SQL injection.
+	allowedContextColumns := map[string]bool{
+		"where_context":    true,
+		"with_context":     true,
+		"activity_context": true,
 	}
 
 	roundAvg := func(v float64) float64 {
@@ -1605,6 +1647,9 @@ func (s *MoodService) GetContextInsights(appID string, userID uuid.UUID, days in
 	}
 
 	buildMap := func(col string) (map[string]float64, error) {
+		if !allowedContextColumns[col] {
+			return nil, fmt.Errorf("invalid context column: %s", col)
+		}
 		var rows []struct {
 			Context string  `gorm:"column:ctx"`
 			Avg     float64 `gorm:"column:avg_intensity"`

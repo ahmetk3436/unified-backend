@@ -164,6 +164,26 @@ func (s *SleepService) Create(appID string, userID uuid.UUID, req CreateSleepReq
 		return nil, errors.New("too many sounds: max 500")
 	}
 
+	// Validate soundscape_played against allowed values.
+	validSoundscapes := map[string]bool{
+		"brown_noise": true, "white_noise": true, "rain": true, "ocean": true,
+		"fan": true, "pink_noise": true, "thunder": true, "forest": true,
+		"none": true,
+	}
+	if req.SoundscapePlayed != nil && *req.SoundscapePlayed != "" {
+		if !validSoundscapes[*req.SoundscapePlayed] {
+			return nil, errors.New("invalid soundscape_played value")
+		}
+	}
+
+	// Validate room_temp against allowed values.
+	validRoomTemps := map[string]bool{"cool": true, "comfortable": true, "warm": true}
+	if req.RoomTemp != nil && *req.RoomTemp != "" {
+		if !validRoomTemps[*req.RoomTemp] {
+			return nil, errors.New("invalid room_temp value: must be cool, comfortable, or warm")
+		}
+	}
+
 	phasesJSON, _ := json.Marshal(req.Phases)
 	soundsJSON, _ := json.Marshal(req.Sounds)
 
@@ -272,9 +292,21 @@ func (s *SleepService) Update(appID string, userID uuid.UUID, id uuid.UUID, req 
 		session.SoundsJSON = string(j)
 	}
 	if req.SoundscapePlayed != nil {
+		validSoundscapesUpd := map[string]bool{
+			"brown_noise": true, "white_noise": true, "rain": true, "ocean": true,
+			"fan": true, "pink_noise": true, "thunder": true, "forest": true,
+			"none": true,
+		}
+		if *req.SoundscapePlayed != "" && !validSoundscapesUpd[*req.SoundscapePlayed] {
+			return nil, errors.New("invalid soundscape_played value")
+		}
 		session.SoundscapePlayed = req.SoundscapePlayed
 	}
 	if req.RoomTemp != nil {
+		validRoomTempsUpd := map[string]bool{"cool": true, "comfortable": true, "warm": true}
+		if *req.RoomTemp != "" && !validRoomTempsUpd[*req.RoomTemp] {
+			return nil, errors.New("invalid room_temp value: must be cool, comfortable, or warm")
+		}
 		session.RoomTemp = req.RoomTemp
 	}
 

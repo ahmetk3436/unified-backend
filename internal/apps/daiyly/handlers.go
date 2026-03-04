@@ -708,16 +708,29 @@ func (h *JournalHandler) Export(c *fiber.Ctx) error {
 		// Header row.
 		_ = w.Write([]string{"date", "mood", "title", "content", "tags", "sentiment", "entry_type"})
 
+		// sanitizeCSVCell prevents CSV/spreadsheet formula injection.
+		// Cells beginning with =, +, -, or @ are treated as formulas by
+		// Excel and Google Sheets. Prepending a single-quote neutralises them.
+		sanitizeCSVCell := func(s string) string {
+			if len(s) > 0 {
+				switch s[0] {
+				case '=', '+', '-', '@', '\t', '\r':
+					return "'" + s
+				}
+			}
+			return s
+		}
+
 		for _, e := range entries {
 			sentiment := e.DetectedEmotion
 			_ = w.Write([]string{
 				e.EntryDate.Format("2006-01-02"),
-				e.MoodEmoji,
+				sanitizeCSVCell(e.MoodEmoji),
 				"", // title field — not currently stored, left empty
-				e.Content,
+				sanitizeCSVCell(e.Content),
 				"", // tags field — not currently stored, left empty
-				sentiment,
-				e.EntryType,
+				sanitizeCSVCell(sentiment),
+				sanitizeCSVCell(e.EntryType),
 			})
 		}
 		w.Flush()
