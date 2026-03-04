@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -1770,4 +1772,190 @@ var SubEmotionVocabulary = map[string][]string{
 // GetSubEmotions returns the static sub-emotion vocabulary. No DB access needed.
 func (s *MoodService) GetSubEmotions() *SubEmotionsResponse {
 	return &SubEmotionsResponse{SubEmotions: SubEmotionVocabulary}
+}
+
+// GetTherapistReport generates a 30-day clinical mood summary.
+func (s *MoodService) GetTherapistReport(appID string, userID uuid.UUID) (*TherapistReportResponse, error) {
+	since := time.Now().AddDate(0, 0, -30)
+	var entries []MoodCheckIn
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ? AND created_at >= ? AND deleted_at IS NULL", userID, since).
+		Order("created_at ASC").
+		Limit(500).
+		Find(&entries).Error; err != nil {
+		return nil, errors.New("storage error")
+	}
+
+	if len(entries) == 0 {
+		return nil, errors.New("not enough data")
+	}
+
+	// Compute stats
+	var totalScore int
+	emotionCounts := make(map[string]int)
+	lowDays, highDays := 0, 0
+	for _, e := range entries {
+		totalScore += e.Intensity
+		if e.Intensity <= 3 {
+			lowDays++
+		}
+		if e.Intensity >= 8 {
+			highDays++
+		}
+		if e.EmotionName != "" {
+			emotionCounts[e.EmotionName]++
+		}
+	}
+	avgMood := float64(totalScore) / float64(len(entries))
+
+	// Top 5 emotions
+	type kv struct {
+		k string
+		v int
+	}
+	var pairs []kv
+	for k, v := range emotionCounts {
+		pairs = append(pairs, kv{k, v})
+	}
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].v > pairs[j].v })
+	topEmotions := make([]EmotionFreq, 0, 5)
+	for i := 0; i < len(pairs) && i < 5; i++ {
+		pct := float64(pairs[i].v) / float64(len(entries)) * 100
+		topEmotions = append(topEmotions, EmotionFreq{Emotion: pairs[i].k, Count: pairs[i].v, Pct: math.Round(pct*10) / 10})
+	}
+
+	// Trend: compare first half vs second half avg
+	mid := len(entries) / 2
+	var firstHalf, secondHalf float64
+	for i := 0; i < mid; i++ {
+		firstHalf += float64(entries[i].Intensity)
+	}
+	for i := mid; i < len(entries); i++ {
+		secondHalf += float64(entries[i].Intensity)
+	}
+	if mid > 0 {
+		firstHalf /= float64(mid)
+	}
+	if len(entries)-mid > 0 {
+		secondHalf /= float64(len(entries) - mid)
+	}
+	trend := "stable"
+	if secondHalf-firstHalf > 0.5 {
+		trend = "improving"
+	} else if firstHalf-secondHalf > 0.5 {
+		trend = "declining"
+	}
+
+	// Build AI prompt
+	topEmotionStr := ""
+	for _, e := range topEmotions {
+		topEmotionStr += fmt.Sprintf("%s (%.0f%%), ", e.Emotion, e.Pct)
+	}
+	systemPrompt := "You are generating a clinical mood summary for a therapist. Be factual, clinical, and objective. Do not include advice or diagnosis."
+	userPrompt := fmt.Sprintf(
+		"Patient data for the last 30 days:\n"+
+			"- Total check-ins: %d\n- Average mood: %.1f/10\n- Trend: %s\n"+
+			"- Low-mood days (<=3/10): %d\n- High-mood days (>=8/10): %d\n"+
+			"- Most frequent emotions: %s\n\n"+
+			"Write a 4-6 sentence clinical summary in third person ('The patient...') that a therapist would find useful. "+
+			"Include: overall emotional trend, notable patterns, frequency of high vs low affect days, and any observations about emotional variability.",
+		len(entries), avgMood, trend, lowDays, highDays, topEmotionStr,
+	)
+
+	narrative, err := s.callOpenAIDirect(systemPrompt, userPrompt)
+	if err != nil {
+		narrative = fmt.Sprintf("30-day mood data: %d entries, average %.1f/10, trend %s.", len(entries), avgMood, trend)
+	}
+
+	period := fmt.Sprintf("%s - %s",
+		since.Format("Jan 2, 2006"),
+		time.Now().Format("Jan 2, 2006"),
+	)
+
+	return &TherapistReportResponse{
+		Period:       period,
+		TotalEntries: len(entries),
+		AverageMood:  math.Round(avgMood*10) / 10,
+		MoodTrend:    trend,
+		TopEmotions:  topEmotions,
+		LowDays:      lowDays,
+		HighDays:     highDays,
+		Narrative:    narrative,
+		ExportedAt:   time.Now().UTC().Format(time.RFC3339),
+	}, nil
+}
+
+// GetWeeklyNarrative generates an AI mood narrative for the last 7 days.
+func (s *MoodService) GetWeeklyNarrative(appID string, userID uuid.UUID) (*WeeklyNarrativeResponse, error) {
+	since := time.Now().AddDate(0, 0, -7)
+	var entries []MoodCheckIn
+	if err := s.db.Scopes(tenant.ForTenant(appID)).
+		Where("user_id = ? AND created_at >= ? AND deleted_at IS NULL", userID, since).
+		Order("created_at ASC").
+		Limit(100).
+		Find(&entries).Error; err != nil {
+		return nil, errors.New("storage error")
+	}
+
+	if len(entries) < 3 {
+		return nil, errors.New("not enough data")
+	}
+
+	// Group by day
+	dailyData := make(map[string][]int) // date -> scores
+	emotionCounts := make(map[string]int)
+	var totalScore int
+	for _, e := range entries {
+		day := e.CreatedAt.Format("Mon Jan 2")
+		dailyData[day] = append(dailyData[day], e.Intensity)
+		totalScore += e.Intensity
+		if e.EmotionName != "" {
+			emotionCounts[e.EmotionName]++
+		}
+	}
+	avgMood := float64(totalScore) / float64(len(entries))
+
+	// Dominant emotion
+	dominantEmotion := ""
+	maxCount := 0
+	for em, cnt := range emotionCounts {
+		if cnt > maxCount {
+			maxCount = cnt
+			dominantEmotion = em
+		}
+	}
+
+	// Build day summary
+	var daySummary string
+	for day, scores := range dailyData {
+		var sum int
+		for _, sc := range scores {
+			sum += sc
+		}
+		avg := float64(sum) / float64(len(scores))
+		daySummary += fmt.Sprintf("%s: avg %.1f/10 (%d entries), ", day, avg, len(scores))
+	}
+
+	systemPrompt := "You are a warm, insightful mood coach. Write a plain-English weekly mood summary in second person. Be honest and specific. Do not give advice or diagnosis."
+	userPrompt := fmt.Sprintf(
+		"Here are 7 days of mood data: %s\n"+
+			"Overall average: %.1f/10. Dominant emotion: %s.\n\n"+
+			"Write a 3-4 sentence weekly mood narrative starting with 'You'. "+
+			"Include: main emotional theme, notable high/low point, any pattern you notice.",
+		daySummary, avgMood, dominantEmotion,
+	)
+
+	narrative, err := s.callOpenAIDirect(systemPrompt, userPrompt)
+	if err != nil {
+		narrative = fmt.Sprintf("You had %d mood check-ins this week with an average of %.1f/10. Your dominant emotion was %s.", len(entries), avgMood, dominantEmotion)
+	}
+
+	return &WeeklyNarrativeResponse{
+		Narrative:       narrative,
+		WeekStart:       since.Format("Jan 2, 2006"),
+		WeekEnd:         time.Now().Format("Jan 2, 2006"),
+		DominantEmotion: dominantEmotion,
+		EntryCount:      len(entries),
+		AverageMood:     math.Round(avgMood*10) / 10,
+	}, nil
 }

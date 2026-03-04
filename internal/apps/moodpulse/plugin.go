@@ -121,6 +121,10 @@ func (p *MoodPulsePlugin) RegisterRoutes(router fiber.Router, db *gorm.DB, cfg *
 	router.Get("/moods/med-correlation", handler.GetMedCorrelation)
 	router.Get("/moods/sub-emotions", handler.GetSubEmotions)
 
+	// AI-powered clinical + narrative endpoints (MUST be before :id catch-all)
+	router.Get("/moods/therapist-report", aiLimiter, handler.TherapistReport)
+	router.Get("/moods/weekly-narrative", aiLimiter, handler.GetWeeklyNarrative)
+
 	// Parameterized routes last
 	router.Get("/moods/:id", handler.Get)
 	router.Put("/moods/:id", handler.Update)

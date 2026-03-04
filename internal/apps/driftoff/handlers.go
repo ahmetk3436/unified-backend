@@ -518,3 +518,47 @@ func (h *SleepHandler) GetAlertnessLogs(c *fiber.Ctx) error {
 
 	return c.JSON(resp)
 }
+
+// GetNapOptimizer handles GET /sleeps/nap-optimizer
+func (h *SleepHandler) GetNapOptimizer(c *fiber.Ctx) error {
+	appID := c.Locals("app_id").(string)
+	userID := c.Locals("user_id").(uuid.UUID)
+	result, err := h.svc.GetNapOptimizer(appID, userID)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "could not compute nap optimizer"})
+	}
+	return c.JSON(result)
+}
+
+// CreateDream handles POST /sleeps/dream
+func (h *SleepHandler) CreateDream(c *fiber.Ctx) error {
+	appID := c.Locals("app_id").(string)
+	userID := c.Locals("user_id").(uuid.UUID)
+	var req CreateDreamRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid body"})
+	}
+	dream, err := h.svc.CreateDream(appID, userID, req)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.Status(201).JSON(dream)
+}
+
+// ListDreams handles GET /sleeps/dreams
+func (h *SleepHandler) ListDreams(c *fiber.Ctx) error {
+	appID := c.Locals("app_id").(string)
+	userID := c.Locals("user_id").(uuid.UUID)
+	days, _ := strconv.Atoi(c.Query("days", "30"))
+	if days < 1 {
+		days = 30
+	}
+	if days > 365 {
+		days = 365
+	}
+	result, err := h.svc.ListDreams(appID, userID, days)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "storage error"})
+	}
+	return c.JSON(result)
+}

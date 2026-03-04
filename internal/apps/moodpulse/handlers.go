@@ -685,3 +685,31 @@ func (h *MoodHandler) GetSubEmotions(c *fiber.Ctx) error {
 	}
 	return c.JSON(h.svc.GetSubEmotions())
 }
+
+// TherapistReport handles GET /moods/therapist-report
+func (h *MoodHandler) TherapistReport(c *fiber.Ctx) error {
+	appID := c.Locals("app_id").(string)
+	userID := c.Locals("user_id").(uuid.UUID)
+	report, err := h.svc.GetTherapistReport(appID, userID)
+	if err != nil {
+		if err.Error() == "not enough data" {
+			return c.Status(422).JSON(fiber.Map{"error": "not_enough_data", "message": "Log at least 7 moods to generate a report"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "could not generate report"})
+	}
+	return c.JSON(report)
+}
+
+// GetWeeklyNarrative handles GET /moods/weekly-narrative
+func (h *MoodHandler) GetWeeklyNarrative(c *fiber.Ctx) error {
+	appID := c.Locals("app_id").(string)
+	userID := c.Locals("user_id").(uuid.UUID)
+	narrative, err := h.svc.GetWeeklyNarrative(appID, userID)
+	if err != nil {
+		if err.Error() == "not enough data" {
+			return c.Status(422).JSON(fiber.Map{"error": "not_enough_data", "message": "Log at least 3 moods this week to generate a narrative"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "could not generate narrative"})
+	}
+	return c.JSON(narrative)
+}
