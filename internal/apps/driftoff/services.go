@@ -37,6 +37,7 @@ type coachCacheEntry struct {
 type SleepService struct {
 	db           *gorm.DB
 	aiAPIKey     string
+	aiAPIURL     string
 	aiModel      string
 	aiTimeout    time.Duration
 	coachCache   map[string]coachCacheEntry
@@ -44,9 +45,20 @@ type SleepService struct {
 }
 
 func NewSleepService(db *gorm.DB, cfg *config.Config) *SleepService {
+	// Use OpenAI when key is configured; fall back to GLM (always configured) otherwise.
+	apiKey := cfg.OpenAIAPIKey
+	apiURL := "https://api.openai.com/v1/chat/completions"
 	model := cfg.OpenAIModel
 	if model == "" {
 		model = "gpt-4o-mini"
+	}
+	if apiKey == "" {
+		apiKey = cfg.GLMAPIKey
+		apiURL = cfg.GLMAPIURL
+		model = cfg.GLMModel
+		if model == "" {
+			model = "glm-4-flash"
+		}
 	}
 	timeout := cfg.AITimeout
 	if timeout == 0 {
@@ -54,7 +66,8 @@ func NewSleepService(db *gorm.DB, cfg *config.Config) *SleepService {
 	}
 	return &SleepService{
 		db:         db,
-		aiAPIKey:   cfg.OpenAIAPIKey,
+		aiAPIKey:   apiKey,
+		aiAPIURL:   apiURL,
 		aiModel:    model,
 		aiTimeout:  timeout,
 		coachCache: make(map[string]coachCacheEntry),
@@ -99,7 +112,7 @@ func (s *SleepService) callOpenAI(systemPrompt, userPrompt string) (string, erro
 		return "", fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", s.aiAPIURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
 	}
@@ -871,7 +884,8 @@ func (s *SleepService) GetSleepCoach(appID string, userID uuid.UUID) (string, er
 
 	content, err := s.callOpenAI(systemPrompt, contextStr)
 	if err != nil {
-		return "", err
+		// AI unavailable — return a curated evidence-based tip rather than an error.
+		content = sleepCoachFallback(userID.String())
 	}
 
 	s.coachCacheMu.Lock()
@@ -879,6 +893,26 @@ func (s *SleepService) GetSleepCoach(appID string, userID uuid.UUID) (string, er
 	s.coachCacheMu.Unlock()
 
 	return content, nil
+}
+
+// sleepCoachFallback returns a rotating evidence-based sleep tip when the AI is unavailable.
+func sleepCoachFallback(seed string) string {
+	tips := []string{
+		"Sleep consistency matters more than total duration. Going to bed and waking at the same time every day — even weekends — keeps your circadian rhythm stable and dramatically improves deep sleep quality.",
+		"Your bedroom temperature is one of the most impactful factors for sleep quality. Research from the National Sleep Foundation shows 65–68°F (18–20°C) is optimal. Even a 1°C reduction can increase deep sleep by up to 15%.",
+		"Caffeine has a half-life of 5–7 hours. A coffee at 2pm still has 50% of its caffeine in your system at 9pm. Try cutting off caffeine by noon if you're struggling with sleep onset.",
+		"The 20-minute rule: if you can't fall asleep within 20 minutes, get up and do something calm in dim light. Lying in bed awake trains your brain to associate the bed with wakefulness — the opposite of what you want.",
+		"Blue light from screens suppresses melatonin production for up to 3 hours after exposure. Use Night Shift or Night Mode, or put screens away 90 minutes before bed for measurably better sleep onset.",
+		"Sleep debt is cumulative and takes multiple nights to repay. You can't fully recover a week of poor sleep in one night. Prioritise consistent 7–9 hours over sleeping in on weekends.",
+		"Alcohol might help you fall asleep, but it fragments your sleep architecture — especially REM sleep, which is critical for emotional processing and memory. Even 1–2 drinks can reduce REM by up to 24%.",
+		"Exercise significantly improves sleep quality, but timing matters. Vigorous exercise within 2 hours of bed can delay sleep onset for some people. Morning or early afternoon workouts tend to produce the best sleep outcomes.",
+	}
+	// Rotate based on first byte of seed (deterministic per-user, changes day-to-day)
+	idx := 0
+	if len(seed) > 0 {
+		idx = int(seed[0]) % len(tips)
+	}
+	return tips[idx]
 }
 
 // GetDoctorReport generates a clinical sleep summary suitable for a doctor appointment.

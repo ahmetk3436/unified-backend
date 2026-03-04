@@ -275,7 +275,7 @@ func (h *SleepHandler) GetSleepCoach(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, "coaching unavailable")
 	}
 
-	return c.JSON(fiber.Map{"coaching": coaching})
+	return c.JSON(fiber.Map{"message": coaching})
 }
 
 // GetDoctorReport returns a clinical sleep summary. PREMIUM feature.
