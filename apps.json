@@ -6,6 +6,7 @@
     {"app_id": "daiyly", "app_name": "Daiyly", "bundle_id": "com.ahmetcoskunkizilkaya.daiyly"},
     {"app_id": "ecomonitor", "app_name": "EcoMonitor AI", "bundle_id": "com.ahmetcoskunkizilkaya.ecomonitor"},
     {"app_id": "eracheck", "app_name": "EraCheck", "bundle_id": "com.ahmetcoskunkizilkaya.eracheck"},
+    {"app_id": "expense_pulse", "app_name": "ExpensePulse", "bundle_id": "com.ahmetcoskunkizilkaya.expensepulse"},
     {"app_id": "feelsy", "app_name": "Feelsy", "bundle_id": "com.ahmetcoskunkizilkaya.moodtrackai"},
     {"app_id": "moodtracker", "app_name": "MoodTracker Pro", "bundle_id": "com.ahmetcoskunkizilkaya.feelsy"},
     {"app_id": "mewify", "app_name": "Mewify", "bundle_id": "com.ahmetcoskunkizilkaya.mewify"},
@@ -16,6 +17,7 @@
     {"app_id": "vibecheck", "app_name": "VibeCheck", "bundle_id": "com.ahmetcoskunkizilkaya.vibemeter"},
     {"app_id": "wouldyou", "app_name": "WouldYou", "bundle_id": "com.ahmetcoskunkizilkaya.wouldyourather"},
     {"app_id": "moodpulse", "app_name": "MoodPulse", "bundle_id": "com.ahmetcoskunkizilkaya.moodpulse"},
-    {"app_id": "driftoff", "app_name": "DriftOff", "bundle_id": "com.ahmetcoskunkizilkaya.driftoff"}
+    {"app_id": "driftoff", "app_name": "DriftOff", "bundle_id": "com.ahmetcoskunkizilkaya.driftoff"},
+    {"app_id": "lucky_draw", "app_name": "LuckyDraw", "bundle_id": "com.ahmetilkaya.luckcoskunkizydraw"}
   ]
 }
