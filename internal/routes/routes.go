@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps"
-	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/lucky_draw"
+	
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/config"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/handlers"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/middleware"
@@ -194,39 +194,19 @@ func Setup(
 	webhooks := api.Group("/webhooks")
 	webhooks.Post("/revenuecat/:app_id", webhookHandler.HandleRevenueCat)
 
-	// LuckyDraw public endpoints (no JWT required - supports guest mode)
-	luckyDrawPublic := api.Group("/p/lucky_draw")
-	luckyDrawSvc := lucky_draw.NewLuckyDrawService(db, cfg)
-	luckyDrawHandler := lucky_draw.NewLuckyDrawHandler(luckyDrawSvc)
-
-	luckyDrawPublicLimiter := limiter.New(limiter.Config{
-		Max:               20,
-		Expiration:        1 * time.Hour,
-		LimiterMiddleware: limiter.SlidingWindow{},
-		KeyGenerator:      func(c *fiber.Ctx) string { return "lucky_draw:" + c.IP() },
-		LimitReached: func(c *fiber.Ctx) error {
-			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
-				"error":   true,
-				"message": "Rate limit exceeded. Please try again in an hour.",
-			})
-		},
-	})
-
-	// Public endpoints (guest mode)
-	luckyDrawPublic.Post("/draw", luckyDrawPublicLimiter, luckyDrawHandler.Create)
-	luckyDrawPublic.Get("", luckyDrawHandler.List)
-	luckyDrawPublic.Get("/:id", luckyDrawHandler.Get)
-
-	// Protected endpoints (require auth)
-	luckyDrawProtected := api.Group("/p/lucky_draw", middleware.JWTProtected(cfg))
-	luckyDrawProtected.Delete("/:id", luckyDrawHandler.Delete)
-	luckyDrawProtected.Get("/stats", luckyDrawHandler.GetStats)
-	luckyDrawProtected.Get("/history", luckyDrawHandler.GetHistory)
-
-	// Other plugin routes (JWT required)
+	// Plugin routes - create a protected group for plugins only
+	// This ensures JWT middleware doesn't affect public routes
 	protected := api.Group("/p", middleware.JWTProtected(cfg))
+
+	// Special handling for lucky_draw - register on public group (no JWT)
+	// The lucky_draw plugin handles guest mode internally
+	publicGroup := api.Group("/p")
+
 	for _, p := range plugins {
-		if p.ID() != "lucky_draw" {
+		if p.ID() == "lucky_draw" {
+			// LuckyDraw: register public endpoints (guest mode) + protected endpoints
+			p.RegisterRoutes(publicGroup, db, cfg)
+		} else {
 			p.RegisterRoutes(protected, db, cfg)
 		}
 		// If the plugin also implements AdminPlugin, register admin routes
