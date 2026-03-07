@@ -188,6 +188,11 @@ func main() {
 	// Routes
 	routes.Setup(app, cfg, database.DB, authHandler, healthHandler, webhookHandler, moderationHandler, legalHandler, configHandler, plugins)
 
+	// TEST ROUTE - direct test in main
+	app.Get("/api/test-direct", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"status": "direct-ok"})
+	})
+
 	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
