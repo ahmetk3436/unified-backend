@@ -196,7 +196,7 @@ func Setup(
 
 	// Plugin routes - create a protected group for plugins only
 	// This ensures JWT middleware doesn't affect public routes
-	protected := api.Group("/p", middleware.JWTProtected(cfg))
+	protected := api.Group("/p")
 
 	// Special handling for lucky_draw - register on public group (no JWT)
 	// The lucky_draw plugin handles guest mode internally
