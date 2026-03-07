@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps"
+	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/lucky_draw"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/config"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/handlers"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/middleware"
@@ -193,11 +194,42 @@ func Setup(
 	webhooks := api.Group("/webhooks")
 	webhooks.Post("/revenuecat/:app_id", webhookHandler.HandleRevenueCat)
 
-	// Plugin routes - create a protected group for plugins only
-	// This ensures JWT middleware doesn't affect public routes
+	// Public plugin routes (no JWT required) - for guest-friendly plugins like lucky_draw
+	public := api.Group("/p")
+
+	// LuckyDraw public endpoint for guest mode (rate limited separately)
+	luckyDrawPublicLimiter := limiter.New(limiter.Config{
+		Max:               20,
+		Expiration:        1 * time.Hour,
+		LimiterMiddleware: limiter.SlidingWindow{},
+		KeyGenerator:      func(c *fiber.Ctx) string { return "lucky_draw:public:" + c.IP() },
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+				"error":   true,
+				"message": "Rate limit exceeded. Please try again in an hour.",
+			})
+		},
+	})
+	luckyDrawSvc := lucky_draw.NewLuckyDrawService(db, cfg)
+	luckyDrawHandler := lucky_draw.NewLuckyDrawHandler(luckyDrawSvc)
+	// Public: /api/p/lucky_draw/draw (guest mode - no JWT required)
+	public.Post("/lucky_draw/draw", luckyDrawPublicLimiter, luckyDrawHandler.Create)
+
+	// Protected plugin routes (JWT required)
 	protected := api.Group("/p", middleware.JWTProtected(cfg))
+
+	// Register lucky_draw protected endpoints
+	protected.Get("/lucky_draw", luckyDrawHandler.List)
+	protected.Get("/lucky_draw/:id", luckyDrawHandler.Get)
+	protected.Delete("/lucky_draw/:id", luckyDrawHandler.Delete)
+	protected.Get("/lucky_draw/stats", luckyDrawHandler.GetStats)
+	protected.Get("/lucky_draw/history", luckyDrawHandler.GetHistory)
+
+	// Register other plugins (non-lucky_draw)
 	for _, p := range plugins {
-		p.RegisterRoutes(protected, db, cfg)
+		if p.ID() != "lucky_draw" {
+			p.RegisterRoutes(protected, db, cfg)
+		}
 		// If the plugin also implements AdminPlugin, register admin routes
 		if ap, ok := p.(apps.AdminPlugin); ok {
 			ap.RegisterAdminRoutes(admin, db, cfg)
