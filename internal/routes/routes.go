@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps"
-	
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/config"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/handlers"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/middleware"
@@ -197,18 +196,8 @@ func Setup(
 	// Plugin routes - create a protected group for plugins only
 	// This ensures JWT middleware doesn't affect public routes
 	protected := api.Group("/p")
-
-	// Special handling for lucky_draw - register on public group (no JWT)
-	// The lucky_draw plugin handles guest mode internally
-	publicGroup := api.Group("/p")
-
 	for _, p := range plugins {
-		if p.ID() == "lucky_draw" {
-			// LuckyDraw: register public endpoints (guest mode) + protected endpoints
-			p.RegisterRoutes(publicGroup, db, cfg)
-		} else {
-			p.RegisterRoutes(protected, db, cfg)
-		}
+		p.RegisterRoutes(protected, db, cfg)
 		// If the plugin also implements AdminPlugin, register admin routes
 		if ap, ok := p.(apps.AdminPlugin); ok {
 			ap.RegisterAdminRoutes(admin, db, cfg)
