@@ -194,15 +194,16 @@ func Setup(
 	webhooks := api.Group("/webhooks")
 	webhooks.Post("/revenuecat/:app_id", webhookHandler.HandleRevenueCat)
 
-	// Public plugin routes (no JWT required) - for guest-friendly plugins like lucky_draw
-	public := api.Group("/p")
+	// LuckyDraw public endpoints (no JWT required - supports guest mode)
+	luckyDrawPublic := api.Group("/p/lucky_draw")
+	luckyDrawSvc := lucky_draw.NewLuckyDrawService(db, cfg)
+	luckyDrawHandler := lucky_draw.NewLuckyDrawHandler(luckyDrawSvc)
 
-	// LuckyDraw public endpoint for guest mode (rate limited separately)
 	luckyDrawPublicLimiter := limiter.New(limiter.Config{
 		Max:               20,
 		Expiration:        1 * time.Hour,
 		LimiterMiddleware: limiter.SlidingWindow{},
-		KeyGenerator:      func(c *fiber.Ctx) string { return "lucky_draw:public:" + c.IP() },
+		KeyGenerator:      func(c *fiber.Ctx) string { return "lucky_draw:" + c.IP() },
 		LimitReached: func(c *fiber.Ctx) error {
 			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
 				"error":   true,
@@ -210,22 +211,20 @@ func Setup(
 			})
 		},
 	})
-	luckyDrawSvc := lucky_draw.NewLuckyDrawService(db, cfg)
-	luckyDrawHandler := lucky_draw.NewLuckyDrawHandler(luckyDrawSvc)
-	// Public: /api/p/lucky_draw/draw (guest mode - no JWT required)
-	public.Post("/lucky_draw/draw", luckyDrawPublicLimiter, luckyDrawHandler.Create)
 
-	// Protected plugin routes (JWT required)
+	// Public endpoints (guest mode)
+	luckyDrawPublic.Post("/draw", luckyDrawPublicLimiter, luckyDrawHandler.Create)
+	luckyDrawPublic.Get("", luckyDrawHandler.List)
+	luckyDrawPublic.Get("/:id", luckyDrawHandler.Get)
+
+	// Protected endpoints (require auth)
+	luckyDrawProtected := api.Group("/p/lucky_draw", middleware.JWTProtected(cfg))
+	luckyDrawProtected.Delete("/:id", luckyDrawHandler.Delete)
+	luckyDrawProtected.Get("/stats", luckyDrawHandler.GetStats)
+	luckyDrawProtected.Get("/history", luckyDrawHandler.GetHistory)
+
+	// Other plugin routes (JWT required)
 	protected := api.Group("/p", middleware.JWTProtected(cfg))
-
-	// Register lucky_draw protected endpoints
-	protected.Get("/lucky_draw", luckyDrawHandler.List)
-	protected.Get("/lucky_draw/:id", luckyDrawHandler.Get)
-	protected.Delete("/lucky_draw/:id", luckyDrawHandler.Delete)
-	protected.Get("/lucky_draw/stats", luckyDrawHandler.GetStats)
-	protected.Get("/lucky_draw/history", luckyDrawHandler.GetHistory)
-
-	// Register other plugins (non-lucky_draw)
 	for _, p := range plugins {
 		if p.ID() != "lucky_draw" {
 			p.RegisterRoutes(protected, db, cfg)
