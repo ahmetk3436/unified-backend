@@ -196,6 +196,12 @@ func Setup(
 	// Plugin routes - create a protected group for plugins only
 	// This ensures JWT middleware doesn't affect public routes
 	protected := api.Group("/p")
+	
+	// DEBUG: direct route on protected group
+	protected.Get("/direct-test", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"status": "protected-direct-ok"})
+	})
+	
 	for _, p := range plugins {
 		p.RegisterRoutes(protected, db, cfg)
 		// If the plugin also implements AdminPlugin, register admin routes
