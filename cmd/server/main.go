@@ -13,6 +13,7 @@ import (
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/daiyly"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/driftoff"
+	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/lucky_draw"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/apps/moodpulse"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/config"
 	"github.com/ahmetcoskunkizilkaya/unified-backend/internal/database"
@@ -95,6 +96,7 @@ func main() {
 	plugins := []apps.Plugin{
 		daiyly.New(),
 		driftoff.New(),
+		lucky_draw.New(),
 		moodpulse.New(),
 	}
 
